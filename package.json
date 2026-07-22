@@ -1,0 +1,23 @@
+{
+  "name": "auction-eleven",
+  "version": "0.8.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c auto \"npm run dev -w @auction-eleven/server\" \"npm run dev -w @auction-eleven/web\"",
+    "build": "npm run build -w @auction-eleven/server && npm run build -w @auction-eleven/web",
+    "start": "npm run start -w @auction-eleven/server",
+    "typecheck": "npm run typecheck -w @auction-eleven/shared && npm run typecheck -w @auction-eleven/server && npm run typecheck -w @auction-eleven/web",
+    "test": "npm run test -w @auction-eleven/server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

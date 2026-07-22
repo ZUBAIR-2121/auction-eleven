@@ -1,0 +1,17 @@
+AUCTION ELEVEN v0.6 REPLACEMENT INSTRUCTIONS
+
+1. Stop the old development server with Ctrl + C.
+2. Copy everything inside this replacement folder into your existing auction-eleven folder.
+3. Choose "Replace the files in the destination" when Windows asks.
+4. Open PowerShell in the project folder and run:
+
+   npm install
+   npm run typecheck
+   npm test
+   npm run build
+   npm run dev
+
+5. Open http://localhost:5173 and press Ctrl + F5.
+6. Create a new room. Old active room state is not compatible with v0.6.
+
+No new npm dependency was added in v0.6, but npm install is safe and keeps workspace links correct.

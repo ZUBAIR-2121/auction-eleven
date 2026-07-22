@@ -1,0 +1,14 @@
+AUCTION ELEVEN v0.4 UPGRADE
+
+1. Stop the running game with Ctrl+C.
+2. Extract this ZIP into your existing auction-eleven folder.
+3. Choose Replace files in the destination.
+4. Run:
+   npm run typecheck
+   npm test
+   npm run build
+   npm run dev
+5. Open http://localhost:5173 and press Ctrl+F5.
+6. Create a NEW room. Old in-memory rooms do not use the v0.4 lineup state.
+
+No new npm dependency was added, so npm install is normally not required when replacing v0.3.

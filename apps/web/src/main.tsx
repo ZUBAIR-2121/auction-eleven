@@ -25,14 +25,29 @@ import {
 import "./styles.css";
 
 type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
-const serverBase = (import.meta.env.VITE_SERVER_URL ?? "").replace(/\/$/, "");
+
+// Backend URL (Render in production, localhost during development)
+const serverBase =
+  (import.meta.env.VITE_SERVER_URL?.trim() || window.location.origin).replace(/\/$/, "");
+
+// REST API helper
 const apiUrl = (path: string) => `${serverBase}${path}`;
-const socket: GameSocket = io(import.meta.env.VITE_SERVER_URL ?? undefined, { autoConnect: true, reconnection: true });
+
+// Socket.IO connection
+const socket: GameSocket = io(serverBase, {
+  autoConnect: true,
+  reconnection: true,
+  transports: ["websocket", "polling"],
+});
+
+// Session ID
 const createSession = () => {
   const existing = localStorage.getItem("ae_session");
   if (existing) return existing;
+
   const id = crypto.randomUUID();
   localStorage.setItem("ae_session", id);
+
   return id;
 };
 const sessionId = createSession();

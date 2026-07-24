@@ -1,6 +1,7 @@
 import {
   FORMATION_BY_ID,
   FORMATIONS,
+  getMaximumSquadSize,
   type Footballer,
   type FormationDefinition,
   type GameSettings,
@@ -18,7 +19,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   minimumBid: 1,
   bidIncrement: 1,
   auctionSeconds: 60,
-  squadSize: 17,
+  squadSize: 11,
   antiSnipeSeconds: 3,
   formationSeconds: 180,
   botDifficulty: "Professional",
@@ -44,14 +45,15 @@ export function validateBid(args: {
   if (amount < minimum) return `Minimum valid bid is ${minimum}M.`;
   if ((amount - settings.minimumBid) % settings.bidIncrement !== 0) return `Bid must follow the ${settings.bidIncrement}M increment.`;
   if (amount > manager.budget) return "You do not have enough budget.";
-  if (manager.squad.length >= settings.squadSize) return `Your ${settings.squadSize}-player squad is already full.`;
+  const maximumSquadSize = getMaximumSquadSize(settings.squadSize);
+  if (manager.squad.length >= maximumSquadSize) return `Your squad is full (${settings.squadSize} starters + 10 substitutes).`;
   const catalogueId = footballer?.catalogId ?? footballer?.id;
   if (catalogueId && manager.squad.some(entry => (entry.footballer.catalogId ?? entry.footballer.id) === catalogueId)) {
     return `You already own ${footballer?.name ?? "this footballer"}.`;
   }
-  const emptyAfterWin = settings.squadSize - manager.squad.length - 1;
-  const reserve = emptyAfterWin * settings.minimumBid;
-  if (manager.budget - amount < reserve) return `Keep at least ${reserve}M to complete your ${settings.squadSize}-player squad.`;
+  const startersStillNeededAfterWin = Math.max(0, settings.squadSize - manager.squad.length - 1);
+  const reserve = startersStillNeededAfterWin * settings.minimumBid;
+  if (manager.budget - amount < reserve) return `Keep at least ${reserve}M to complete your ${settings.squadSize}-player starting squad.`;
   return null;
 }
 
@@ -113,8 +115,8 @@ function greedyLineup(squad: SquadEntry[], formation: FormationDefinition): Line
   return formation.slots.map(formationSlot => assignments.find(item => item.slotId === formationSlot.id)).filter((item): item is LineupAssignment => !!item);
 }
 
-export function buildAutomaticLineup(squad: SquadEntry[], formationId?: string): { formationId: string; lineup: LineupAssignment[]; score: number } {
-  const starterTarget = Math.min(11, squad.length);
+export function buildAutomaticLineup(squad: SquadEntry[], formationId?: string, requestedStarters?: number): { formationId: string; lineup: LineupAssignment[]; score: number } {
+  const starterTarget = Math.min(requestedStarters ?? 11, squad.length);
   const eligible = FORMATIONS.filter(item => item.slots.length === starterTarget);
   const candidates = formationId
     ? [FORMATION_BY_ID.get(formationId)].filter((item): item is FormationDefinition => !!item && item.slots.length === starterTarget)
@@ -131,11 +133,11 @@ export function buildAutomaticLineup(squad: SquadEntry[], formationId?: string):
   return best;
 }
 
-export function validateAndBuildLineup(squad: SquadEntry[], formationId: string, picks: LineupPick[]): LineupAssignment[] {
+export function validateAndBuildLineup(squad: SquadEntry[], formationId: string, picks: LineupPick[], requestedStarters?: number): LineupAssignment[] {
   const formation = FORMATION_BY_ID.get(formationId);
   if (!formation) throw new Error("Choose a valid formation.");
-  if (squad.length < 6 || squad.length > 17) throw new Error("Your squad must contain between 6 and 17 players before setting the lineup.");
-  const starterTarget = Math.min(11, squad.length);
+  if (squad.length < 6 || squad.length > 27) throw new Error("Your squad must contain between 6 and 27 players before setting the lineup.");
+  const starterTarget = Math.min(requestedStarters ?? 11, squad.length);
   if (formation.slots.length !== starterTarget) throw new Error(`Choose a formation for ${starterTarget} starters.`);
   if (picks.length !== starterTarget) throw new Error(`Select exactly ${starterTarget} starting players.`);
   const slotIds = new Set(formation.slots.map(item => item.id));

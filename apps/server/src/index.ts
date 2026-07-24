@@ -51,6 +51,7 @@ io.on("connection",socket=>{
   socket.on("game:start",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.start(payload.code,managerId);return null;}));
   socket.on("game:quitSolo",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.quitSolo(payload.code,managerId);managerId=null;roomCode=null;return null;}));
   socket.on("auction:bid",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.bid(payload.code,managerId,payload.amount,payload.requestId,payload.roundId);return null;}));
+  socket.on("auction:pass",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.pass(payload.code,managerId,payload.roundId);return null;}));
   socket.on("lineup:submit",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.submitLineup(payload.code,managerId,payload.formationId,payload.picks);return null;}));
   socket.on("room:reaction",payload=>{if(managerId)rooms.reaction(payload.code,managerId,payload.reaction);});
   socket.on("chat:send",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.sendChat(payload.code,managerId,payload.text);return null;}));

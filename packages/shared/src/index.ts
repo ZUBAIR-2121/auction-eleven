@@ -2,8 +2,10 @@ export type Position = "GK" | "DEF" | "MID" | "FWD";
 export type GamePhase = "lobby" | "auction" | "round_result" | "formation" | "finished";
 export type PoolTargets = Record<Position, number>;
 export type ManagerLimit = 2 | 3 | 4 | 5 | 6 | 7 | 8;
-export type SquadSize = 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
+export type SquadSize = 6 | 7 | 8 | 9 | 10 | 11;
 export type BotDifficulty = "Amateur" | "Professional" | "World Class" | "Legendary";
+export const MAX_SUBSTITUTES = 10;
+export const getMaximumSquadSize = (starterCount: number): number => starterCount + MAX_SUBSTITUTES;
 export const SQUAD_POSITION_TARGETS: PoolTargets = { GK: 2, DEF: 6, MID: 5, FWD: 4 };
 export function getSquadPositionTargets(size: number): PoolTargets {
   const targets: Record<number, PoolTargets> = {
@@ -234,6 +236,7 @@ export interface RoomState {
   endsAt: number | null;
   formationEndsAt: number | null;
   bidHistory: BidEntry[];
+  passedManagerIds: string[];
   lastWinner: { managerName: string; footballerName: string; amount: number; automatic?: boolean } | null;
   rankings: Ranking[];
   awards: Award[];
@@ -251,6 +254,7 @@ export interface ClientToServerEvents {
   "game:start": (payload: { code: string }, ack: Ack<null>) => void;
   "game:quitSolo": (payload: { code: string }, ack: Ack<null>) => void;
   "auction:bid": (payload: { code: string; amount: number; requestId: string; roundId: string }, ack: Ack<null>) => void;
+  "auction:pass": (payload: { code: string; roundId: string }, ack: Ack<null>) => void;
   "lineup:submit": (payload: { code: string; formationId: string; picks: LineupPick[] }, ack: Ack<null>) => void;
   "room:reaction": (payload: { code: string; reaction: string }) => void;
   "chat:send": (payload: { code: string; text: string }, ack: Ack<null>) => void;

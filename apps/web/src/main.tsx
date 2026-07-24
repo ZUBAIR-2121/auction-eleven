@@ -6,7 +6,9 @@ import { io, type Socket } from "socket.io-client";
 import {
   FORMATIONS,
   FORMATION_BY_ID,
+  getMaximumSquadSize,
   getSquadPositionTargets,
+  MAX_SUBSTITUTES,
   type BotDifficulty,
   type ClientToServerEvents,
   type Footballer,
@@ -56,7 +58,7 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 const POSITIONS: Position[] = ["GK", "DEF", "MID", "FWD"];
 const POSITION_NAMES: Record<Position, string> = { GK: "Goalkeepers", DEF: "Defenders", MID: "Midfielders", FWD: "Forwards" };
 const MANAGER_LIMITS: ManagerLimit[] = [2, 3, 4, 5, 6, 7, 8];
-const SQUAD_SIZES: SquadSize[] = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+const SQUAD_SIZES: SquadSize[] = [6, 7, 8, 9, 10, 11];
 const BOT_DIFFICULTIES: BotDifficulty[] = ["Amateur", "Professional", "World Class", "Legendary"];
 const CHAT_EMOJIS = ["😀", "😂", "😍", "😎", "🤔", "😱", "😭", "😡", "👏", "🙌", "👍", "👎", "🤝", "🔥", "⚡", "💸", "💰", "🏆", "🥇", "⚽", "🥅", "🧤", "🚀", "🎯", "💪", "🧠", "❤️", "✅", "❌", "👀", "🎉", "🫡"];
 const HERO_VIDEO = "https://stream.mux.com/Aa02T7oM1wH5Mk5EEVDYhbZ1ChcdhRsS2m1NYyx4Ua1g.m3u8";
@@ -356,10 +358,10 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
   const isHost = state.hostId === managerId;
   const [poolOpen, setPoolOpen] = useState(false);
   const counts = useMemo(() => countPool(state.availableFootballers, state.selectedFootballerIds), [state.availableFootballers, state.selectedFootballerIds]);
-  const requiredPool = state.managers.length * state.settings.squadSize;
+  const starterCount = state.settings.squadSize;
+  const substituteCount = MAX_SUBSTITUTES;
+  const requiredPool = state.managers.length * getMaximumSquadSize(starterCount);
   const mirroredPool = state.selectedFootballerIds.length < requiredPool;
-  const starterCount = Math.min(11, state.settings.squadSize);
-  const substituteCount = Math.max(0, state.settings.squadSize - starterCount);
   const startDisabled = state.managers.some(manager => !manager.ready) || !state.poolSelectionValid;
   const changeNumber = (key: "startingBudget" | "auctionSeconds" | "formationSeconds", value: number) => {
     const settings: Partial<GameSettings> = { [key]: value };
@@ -382,15 +384,15 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
 
   return <main className="lobby page">
     <div className="room-return-row"><button className="room-back-button" onClick={leave}><span>←</span><div><b>BACK TO GAME MENU</b><small>Leave this room safely</small></div></button></div>
-    <div className="lobby-head"><div><div className="eyebrow">{state.isSolo ? "SOLO PRACTICE LOBBY" : "PRIVATE MATCH LOBBY"}</div><h1>Managers’ Tunnel</h1><p>Each manager buys {state.settings.squadSize} footballers, then assembles {starterCount} starter{starterCount === 1 ? "" : "s"}{substituteCount ? ` and ${substituteCount} substitute${substituteCount === 1 ? "" : "s"}` : ""}.</p></div><div className="room-code"><span>ROOM CODE</span><strong>{state.code}</strong><button onClick={() => navigator.clipboard.writeText(state.code)}>COPY</button></div></div>
-    <div className="lobby-grid"><section className="panel managers-panel"><div className="panel-title"><h2>Room managers</h2><span>{state.managers.length}/{state.settings.managerLimit}</span></div><div className="manager-cards">{state.managers.map(manager => <div className={`manager-card ${manager.ready ? "ready" : ""}`} key={manager.id}><div className="avatar">{manager.avatar}</div><div><strong>{manager.name}</strong><small>{manager.isHost ? "HOST" : manager.isBot ? "AI MANAGER" : "CHALLENGER"}</small></div><div className="ready-tag">{manager.ready ? "READY" : "WAITING"}</div></div>)}</div><div className="squad-rule-card"><b>{state.settings.squadSize}</b><div><strong>CUSTOM SQUAD</strong><span>{starterCount} starter{starterCount === 1 ? "" : "s"}{substituteCount ? ` + ${substituteCount} substitute${substituteCount === 1 ? "" : "s"}` : " · no substitutes"}</span></div></div></section>
+    <div className="lobby-head"><div><div className="eyebrow">{state.isSolo ? "SOLO PRACTICE LOBBY" : "PRIVATE MATCH LOBBY"}</div><h1>Managers’ Tunnel</h1><p>Each manager builds {starterCount} starters and may buy up to {substituteCount} substitutes when budget remains.</p></div><div className="room-code"><span>ROOM CODE</span><strong>{state.code}</strong><button onClick={() => navigator.clipboard.writeText(state.code)}>COPY</button></div></div>
+    <div className="lobby-grid"><section className="panel managers-panel"><div className="panel-title"><h2>Room managers</h2><span>{state.managers.length}/{state.settings.managerLimit}</span></div><div className="manager-cards">{state.managers.map(manager => <div className={`manager-card ${manager.ready ? "ready" : ""}`} key={manager.id}><div className="avatar">{manager.avatar}</div><div><strong>{manager.name}</strong><small>{manager.isHost ? "HOST" : manager.isBot ? "AI MANAGER" : "CHALLENGER"}</small></div><div className="ready-tag">{manager.ready ? "READY" : "WAITING"}</div></div>)}</div><div className="squad-rule-card"><b>{starterCount}</b><div><strong>STARTING SQUAD</strong><span>{starterCount} starters + up to {substituteCount} substitutes</span></div></div></section>
       <section className="panel settings"><div className="panel-title"><h2>Match setup</h2><span>{isHost ? "HOST CONTROL" : "LOCKED"}</span></div>
         <Setting label="Starting budget" value={`${state.settings.startingBudget}M`}><input disabled={!isHost} type="range" min="300" max="3000" step="50" value={state.settings.startingBudget} onChange={event => changeNumber("startingBudget", +event.target.value)} /></Setting>
         <Setting label="Auction timer" value={`${state.settings.auctionSeconds}s`}><input disabled={!isHost} type="range" min="15" max="120" step="5" value={state.settings.auctionSeconds} onChange={event => changeNumber("auctionSeconds", +event.target.value)} /></Setting>
         <Setting label="Formation time limit" value={`${Math.round(state.settings.formationSeconds / 60)} min`}><input disabled={!isHost} type="range" min="120" max="600" step="60" value={state.settings.formationSeconds} onChange={event => changeNumber("formationSeconds", +event.target.value)} /></Setting>
         <div className="manager-limit-setting difficulty-setting"><div><span>AI DIFFICULTY</span><b>{state.settings.botDifficulty.toUpperCase()}</b></div><div className="preset-buttons difficulty-buttons">{BOT_DIFFICULTIES.map(level => <button disabled={!isHost || !state.isSolo} className={state.settings.botDifficulty === level ? "active" : ""} onClick={() => changeBotDifficulty(level)} key={level}>{level}</button>)}</div><small>{state.isSolo ? "Higher levels value positional needs, budget timing and late-round bidding more accurately." : "AI difficulty is used in Solo Practice rooms."}</small></div>
         <div className="manager-limit-setting"><div><span>ROOM CAPACITY</span><b>{state.settings.managerLimit} MANAGERS</b></div><div className="preset-buttons compact-presets">{MANAGER_LIMITS.map(limit => <button disabled={!isHost || (!state.isSolo && limit < state.managers.length)} className={state.settings.managerLimit === limit ? "active" : ""} onClick={() => changeManagerLimit(limit)} key={limit}>{limit}</button>)}</div><small>{state.isSolo ? "AI managers are added automatically." : "Rooms support a minimum of 2 and maximum of 8 managers."}</small></div>
-        <div className="manager-limit-setting squad-size-setting"><div><span>SQUAD SIZE</span><b>{state.settings.squadSize} PLAYERS</b></div><div className="preset-buttons squad-size-buttons">{SQUAD_SIZES.map(size => <button disabled={!isHost} className={state.settings.squadSize === size ? "active" : ""} onClick={() => changeSquadSize(size)} key={size}>{size}</button>)}</div><small>{state.settings.squadSize < 11 ? `${state.settings.squadSize}-a-side formation selection after bidding.` : `${starterCount} starters and ${substituteCount} substitute${substituteCount === 1 ? "" : "s"}.`}</small></div>
+        <div className="manager-limit-setting squad-size-setting"><div><span>STARTING SQUAD</span><b>{state.settings.squadSize} STARTERS</b></div><div className="preset-buttons squad-size-buttons">{SQUAD_SIZES.map(size => <button disabled={!isHost} className={state.settings.squadSize === size ? "active" : ""} onClick={() => changeSquadSize(size)} key={size}>{size}</button>)}</div><small>{state.settings.squadSize < 11 ? `${state.settings.squadSize}-a-side starting formation + up to ${MAX_SUBSTITUTES} substitutes.` : `${starterCount} starters + up to ${MAX_SUBSTITUTES} substitutes.`}</small></div>
         <div className="pool-target-settings"><div className="setting-heading"><span>ROOM PLAYER QUOTAS</span><b>15–20 PER POSITION</b></div>{POSITIONS.map(position => <label key={position}><span>{position}</span><input disabled={!isHost} type="range" min="15" max="20" value={state.settings.poolTargets[position]} onChange={event => changeTarget(position, +event.target.value)} /><b>{state.settings.poolTargets[position]}</b></label>)}</div>
         <div className={`pool-summary ${state.poolSelectionValid ? "valid" : "invalid"}`}><div><span>SELECTED ROOM POOL</span><strong>{state.selectedFootballerIds.length} footballers</strong></div><div className="pool-counts">{POSITIONS.map(position => <span key={position}>{position} <b>{counts[position]}/{state.settings.poolTargets[position]}</b></span>)}</div><button onClick={() => setPoolOpen(true)}>{isHost ? "SELECT PLAYERS" : "VIEW PLAYERS"}</button></div>
         <div className={`capacity-meter ${mirroredPool ? "mirrored" : "unique"}`}><span>{mirroredPool ? "Mirrored auction pool" : "Unique-player auction pool"}</span><b>{state.selectedFootballerIds.length} base / {requiredPool} purchases</b><small>{mirroredPool ? "A footballer may appear for different managers, but never twice in one manager’s squad." : "Every auction card is unique in this room."}</small></div>
@@ -487,8 +489,9 @@ function SquadTracker({ squad, currentPosition, squadSize }: { squad: SquadEntry
   const [expanded, setExpanded] = useState(false);
   const counts = squadPositionCounts(squad);
   const targets = getSquadPositionTargets(squadSize);
+  const maximumSquadSize = getMaximumSquadSize(squadSize);
   return <section className={`squad-tracker ${expanded ? "expanded" : ""}`}>
-    <button className="tracker-head" onClick={() => setExpanded(value => !value)}><div><span>MY AUCTION SQUAD</span><strong>{squad.length}<i>/{squadSize}</i></strong></div><b>{expanded ? "−" : "+"}</b></button>
+    <button className="tracker-head" onClick={() => setExpanded(value => !value)}><div><span>MY AUCTION SQUAD</span><strong>{squad.length}<i>/{maximumSquadSize}</i></strong></div><b>{expanded ? "−" : "+"}</b></button>
     <div className="position-tracker">{POSITIONS.map(position => {
       const remaining = Math.max(0, targets[position] - counts[position]);
       return <div className={`${currentPosition === position ? "current" : ""} ${remaining === 0 ? "complete" : ""}`} key={position}><span>{position}</span><strong>{counts[position]}<i>/{targets[position]}</i></strong><small>{remaining ? `${remaining} needed` : "covered"}</small></div>;
@@ -512,6 +515,17 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
     }
   }, [state.roundIndex]);
   const minimum = state.currentBid === 0 ? state.settings.minimumBid : state.currentBid + state.settings.bidIncrement;
+  const maximumSquadSize = getMaximumSquadSize(state.settings.squadSize);
+  const hasPassed = (state.passedManagerIds ?? []).includes(managerId);
+  const cannotBid = sending || hasPassed || seconds <= 0 || me.squad.length >= maximumSquadSize || me.budget < minimum;
+  const passOnPlayer = () => {
+    if (hasPassed || seconds <= 0) return;
+    setSending(true);
+    socket.emit("auction:pass", { code: state.code, roundId: state.roundId }, response => {
+      setSending(false);
+      if (!response.ok) setError(response.error);
+    });
+  };
   const actualBid = (amount: number) => {
     if (!state.currentFootballer || sending) return;
     setSending(true);
@@ -524,10 +538,10 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
   const quitSolo = () => leave();
   if (state.phase === "round_result") return <RoundResult state={state} />;
   return <main className="arena page"><div className="arena-top"><div><span>ROOM {state.code}</span><b>ROUND {state.roundIndex + 1}/{state.totalRounds}</b></div><div className="arena-controls"><div className="live"><i /> LIVE AUCTION</div><div className="secure-badge" title="Budgets and bids are validated by the server">🔒 SERVER SECURE</div><button aria-label="Send fire reaction" onClick={() => socket.emit("room:reaction", { code: state.code, reaction: "🔥" })}>🔥</button>{state.isSolo && <button className="quit-match" onClick={quitSolo}>QUIT MATCH</button>}</div></div>
-    <div className="arena-grid"><div className="arena-left-stack"><SquadTracker squad={me.squad} currentPosition={state.currentFootballer?.position} squadSize={state.settings.squadSize} /><aside className="panel manager-board"><h3>ROOM SQUADS</h3>{state.managers.map(manager => <div className={`manager-line ${manager.id === state.highestBidderId ? "leading" : ""} ${manager.id === managerId ? "you" : ""}`} key={manager.id}><span className="mini-avatar">{manager.avatar}</span><div><b>{manager.name}</b><small>{manager.squad.length}/{state.settings.squadSize} · {state.settings.squadSize - manager.squad.length} spots left</small></div><strong>{money(manager.budget)}</strong></div>)}</aside></div>
+    <div className="arena-grid"><div className="arena-left-stack"><SquadTracker squad={me.squad} currentPosition={state.currentFootballer?.position} squadSize={state.settings.squadSize} /><aside className="panel manager-board"><h3>ROOM SQUADS</h3>{state.managers.map(manager => <div className={`manager-line ${manager.id === state.highestBidderId ? "leading" : ""} ${manager.id === managerId ? "you" : ""}`} key={manager.id}><span className="mini-avatar">{manager.avatar}</span><div><b>{manager.name}</b><small>{manager.squad.length}/{getMaximumSquadSize(state.settings.squadSize)} · {Math.max(0, getMaximumSquadSize(state.settings.squadSize) - manager.squad.length)} spots left</small></div><strong>{money(manager.budget)}</strong></div>)}</aside></div>
       <section className="auction-stage">{state.currentFootballer && <PlayerCard player={state.currentFootballer} />}<div className="auction-meta"><div className="timer" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><div><strong>{Math.ceil(seconds)}</strong><span>SEC</span></div></div><div className="current-price"><span>CURRENT BID</span><strong>{money(state.currentBid || state.settings.minimumBid)}</strong><p>{state.highestBidderId ? `${state.managers.find(manager => manager.id === state.highestBidderId)?.name} leads` : "Opening bid"}</p></div></div></section>
       <aside className="panel bid-feed"><h3>BID FEED</h3>{state.bidHistory.length === 0 ? <div className="empty-feed">No bids yet.<br />Make the first move.</div> : state.bidHistory.map((bid, index) => <div className={`feed-row ${index === 0 ? "latest" : ""}`} key={bid.id}><span>{bid.managerName}</span><b>{money(bid.amount)}</b></div>)}</aside></div>
-    <div className="bid-dock"><div className="budget-read"><span>YOUR BUDGET</span><b>{money(me.budget)}</b><small>{me.squad.length}/{state.settings.squadSize} signed · {state.settings.squadSize - me.squad.length} open</small></div><div className="quick-bids"><button disabled={sending || seconds <= 0} onClick={() => actualBid(minimum)}>BID {money(minimum)}</button><button disabled={sending || seconds <= 0} onClick={() => actualBid(minimum + 5)}>+5M</button><button disabled={sending || seconds <= 0} onClick={() => actualBid(minimum + 10)}>+10M</button></div><form className="custom-bid" onSubmit={event => { event.preventDefault(); if (custom) actualBid(+custom); }}><input inputMode="numeric" enterKeyHint="send" aria-label="Custom bid amount" value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ""))} placeholder="CUSTOM BID" /><button type="submit" disabled={sending || !custom || seconds <= 0}>PLACE</button></form></div></main>;
+    <div className="bid-dock"><div className="budget-read"><span>YOUR BUDGET</span><b>{money(me.budget)}</b><small>{me.squad.length}/{maximumSquadSize} signed · {Math.max(0, maximumSquadSize - me.squad.length)} open</small></div><div className="quick-bids"><button disabled={cannotBid} onClick={() => actualBid(minimum)}>BID {money(minimum)}</button><button disabled={cannotBid || me.budget < minimum + 5} onClick={() => actualBid(minimum + 5)}>+5M</button><button disabled={cannotBid || me.budget < minimum + 10} onClick={() => actualBid(minimum + 10)}>+10M</button><button type="button" className={`pass-player ${hasPassed ? "passed" : ""}`} disabled={sending || hasPassed || seconds <= 0 || me.squad.length >= maximumSquadSize || me.budget < state.settings.minimumBid} onClick={passOnPlayer}>{hasPassed ? "PASSED" : "PASS PLAYER"}</button></div><form className="custom-bid" onSubmit={event => { event.preventDefault(); if (custom) actualBid(+custom); }}><input inputMode="numeric" enterKeyHint="send" aria-label="Custom bid amount" value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ""))} placeholder="CUSTOM BID" /><button type="submit" disabled={cannotBid || !custom || +custom > me.budget}>PLACE</button></form></div></main>;
 }
 
 function RoundResult({ state }: { state: RoomState }) {
@@ -748,12 +762,22 @@ function Results({ state, managerId, leave }: { state: RoomState; managerId: str
   return <main className="results page"><section className="winner-hero"><div className="trophy">🏆</div><div><div className="eyebrow">FORMATION ANALYSIS COMPLETE</div><h1>{winner?.managerName} wins!</h1><p>{winner?.formationName} · Final team score <strong>{winner?.score}</strong></p></div></section>
     <section className="podium-section"><div className="podium-stage">{podiumOrder.map(result => <div className={`podium-place rank-${result.rank}`} key={result.managerId}><div className="podium-medal">{result.rank === 1 ? "👑" : result.rank === 2 ? "🥈" : "🥉"}</div><span>#{result.rank}</span><h2>{result.managerName}</h2><strong>{result.score}</strong><small>{result.formationName}</small><div><b>FIT {result.lineupFit}</b><b>XI {result.startingXIQuality}</b><b>DEPTH {result.benchStrength}</b></div></div>)}</div></section>
     <div className="results-grid"><section className="panel leaderboard"><div className="panel-title"><h2>Final leaderboard</h2><span>SERVER RANKED</span></div>{state.rankings.map(result => <div className={`rank-row ${result.managerId === managerId ? "you" : ""}`} key={result.managerId}><strong>#{result.rank}</strong><div><b>{result.managerName}</b><small>{result.formationName} · Fit {result.lineupFit} · Depth {result.benchStrength}</small></div><span>{result.score}</span></div>)}</section><section className="panel awards"><div className="panel-title"><h2>Awards</h2><span>MATCH HIGHLIGHTS</span></div>{state.awards.map(award => <div className="award" key={award.title}><div>✦</div><p><span>{award.title}</span><b>{award.managerName}</b><small>{award.detail}</small></p></div>)}</section></div>
-    <section className="squads"><h2>Final {state.settings.squadSize}-player squads</h2><div className="squad-grid">{state.managers.map(manager => {
+    <section className="squads"><h2>Final squads · {state.settings.squadSize} starters + substitutes</h2><div className="squad-grid">{state.managers.map(manager => {
       const starters = new Set(manager.lineup.map(item => item.footballerId));
-      return <div className="squad" key={manager.id}><div><span>{manager.avatar}</span><h3>{manager.name}</h3><b>{FORMATION_BY_ID.get(manager.formationId ?? "")?.name ?? "Formation"}</b></div><h4>STARTING TEAM · {Math.min(11, state.settings.squadSize)}</h4>{manager.squad.filter(entry => starters.has(entry.footballer.id)).map(entry => <SquadRow entry={entry} key={entry.footballer.id} />)}{state.settings.squadSize > 11 && <><h4>SUBSTITUTES · {state.settings.squadSize - 11}</h4>{manager.squad.filter(entry => !starters.has(entry.footballer.id)).map(entry => <SquadRow entry={entry} key={entry.footballer.id} />)}</>}</div>;
+      return <div className="squad" key={manager.id}><div><span>{manager.avatar}</span><h3>{manager.name}</h3><b>{FORMATION_BY_ID.get(manager.formationId ?? "")?.name ?? "Formation"}</b></div><h4>STARTING TEAM · {state.settings.squadSize}</h4>{manager.squad.filter(entry => starters.has(entry.footballer.id)).map(entry => <SquadRow entry={entry} key={entry.footballer.id} />)}{manager.squad.length > state.settings.squadSize && <><h4>SUBSTITUTES · {manager.squad.length - state.settings.squadSize}</h4>{manager.squad.filter(entry => !starters.has(entry.footballer.id)).map(entry => <SquadRow entry={entry} key={entry.footballer.id} />)}</>}</div>;
     })}</div></section><div className="result-actions"><button className="primary" onClick={() => navigator.clipboard.writeText(`Auction Eleven winner: ${winner?.managerName} — ${winner?.formationName} — ${winner?.score} points!`)}>Copy Result</button><button className="secondary" onClick={leave}>New Match</button></div></main>;
 }
 
 function SquadRow({ entry }: { entry: SquadEntry }) { return <p><FootballerPhoto player={entry.footballer} compact /><span>{entry.footballer.position}</span><em>{entry.footballer.name}</em><b>{entry.footballer.overall}</b></p>; }
 
-createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);
+
+function LandscapeGuard({ children }: { children: React.ReactNode }) {
+  return <>
+    <div className="landscape-warning" role="alert" aria-live="assertive">
+      <div className="landscape-warning-card"><div className="rotate-phone">↻</div><h1>Rotate Your Device</h1><p>Auction Eleven is designed for landscape play.</p></div>
+    </div>
+    <div className="landscape-app">{children}</div>
+  </>;
+}
+
+createRoot(document.getElementById("root")!).render(<React.StrictMode><LandscapeGuard><App /></LandscapeGuard></React.StrictMode>);

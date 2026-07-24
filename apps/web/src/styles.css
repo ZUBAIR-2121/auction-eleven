@@ -1170,3 +1170,95 @@ body { min-height: calc(var(--ae-vh, 1vh) * 100) !important; }
 @supports not (overflow: clip) {
   html, body, #root { overflow-x: hidden !important; }
 }
+
+/* v1.1 detailed positions + pointer drag-and-drop */
+.pitch-player-content,
+.bench-list > button {
+  position: relative;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: pan-y;
+}
+
+.drag-grip {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-style: normal;
+  font-size: 14px;
+  line-height: 1;
+  opacity: .62;
+  letter-spacing: -4px;
+  pointer-events: none;
+}
+
+.pitch-player-content .drag-grip {
+  right: 2px;
+  top: 11px;
+  transform: none;
+}
+
+.bench-panel.is-dragging {
+  outline: 2px dashed rgba(122, 255, 187, .72);
+  outline-offset: -5px;
+}
+
+body.formation-dragging {
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+
+body.formation-dragging * {
+  cursor: grabbing !important;
+}
+
+.touch-drag-ghost {
+  position: fixed;
+  z-index: 99999;
+  left: 0;
+  top: 0;
+  width: min(210px, 62vw);
+  min-height: 54px;
+  margin: -28px 0 0 -105px;
+  padding: 9px 28px 9px 10px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(122, 255, 187, .85);
+  border-radius: 12px;
+  background: rgba(7, 14, 18, .96);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, .55);
+  pointer-events: none;
+  will-change: transform;
+}
+
+.touch-drag-ghost b,
+.touch-drag-ghost em {
+  color: #7affbb;
+  font-style: normal;
+}
+
+.touch-drag-ghost span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 800;
+}
+
+@media (max-width: 760px) {
+  .pitch-player-content,
+  .bench-list > button {
+    touch-action: pan-y;
+  }
+
+  .bench-panel {
+    min-height: 230px;
+  }
+
+  .bench-list {
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+}

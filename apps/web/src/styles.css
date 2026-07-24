@@ -898,74 +898,11 @@ button { touch-action: manipulation; }
 }
 
 
-/* v0.9: optional substitutes, pass action, and fixed landscape gameplay */
-html, body, #root { width:100%; height:100%; min-height:100%; margin:0; overscroll-behavior:none; }
-.landscape-app { width:100%; min-height:100%; }
-.landscape-warning { display:none; }
+
+/* v1.0.3 responsive gameplay, portrait support and reliable touch scrolling */
 .pass-player { border-color:rgba(255,190,80,.55)!important; background:rgba(95,55,5,.72)!important; color:#ffd48a!important; }
 .pass-player.passed { border-color:rgba(120,140,160,.35)!important; background:rgba(25,32,40,.9)!important; color:#8f9eac!important; }
 .quick-bids { grid-template-columns:1.35fr 1fr 1fr 1.15fr; }
-
-@media screen and (orientation:portrait) and (max-width:1024px) {
-  html, body, #root { overflow:hidden!important; }
-  .landscape-warning { position:fixed; inset:0; z-index:2147483647; display:flex; align-items:center; justify-content:center; padding:24px; background:radial-gradient(circle at top,rgba(42,125,255,.28),transparent 45%),linear-gradient(160deg,#07111f,#02050b); color:white; text-align:center; }
-  .landscape-warning-card { width:min(420px,100%); }
-  .rotate-phone { display:inline-flex; align-items:center; justify-content:center; width:88px; height:146px; margin-bottom:24px; border:5px solid currentColor; border-radius:18px; font-size:52px; animation:ae-device-rotate 1.8s ease-in-out infinite; }
-  .landscape-warning h1 { margin:0 0 12px; font-size:clamp(28px,8vw,44px); }
-  .landscape-warning p { margin:0; opacity:.78; line-height:1.5; }
-  .landscape-app { visibility:hidden; pointer-events:none; }
-}
-
-@media screen and (orientation:landscape) and (max-height:700px) {
-  html, body, #root { overflow:hidden!important; }
-  .landscape-app { width:100dvw; height:100dvh; overflow:hidden; }
-  .page { height:100dvh; min-height:0!important; overflow:hidden!important; padding-top:58px!important; }
-  .arena { display:grid; grid-template-rows:auto minmax(0,1fr) auto; padding:58px 7px 7px!important; }
-  .arena-top { min-height:38px!important; height:38px; overflow:hidden; }
-  .arena-grid { min-height:0; height:auto; overflow:hidden; grid-template-columns:minmax(150px,.62fr) minmax(0,1.38fr) minmax(145px,.55fr)!important; gap:7px!important; }
-  .arena-left-stack, .auction-stage, .bid-feed { min-height:0!important; height:100%; overflow:hidden; }
-  .arena-left-stack { display:flex; flex-direction:column; }
-  .squad-tracker { position:static!important; flex:0 0 auto; }
-  .manager-board { display:block!important; min-height:0; overflow-y:auto; }
-  .auction-stage { padding:5px!important; gap:5px!important; display:grid; grid-template-columns:minmax(0,1fr) 110px; align-items:center; }
-  .player-card { max-width:300px!important; max-height:calc(100dvh - 155px); padding:7px!important; }
-  .footballer-photo { height:min(24dvh,145px)!important; }
-  .player-card h2 { font-size:clamp(18px,3.4vw,27px)!important; margin:2px 0!important; }
-  .player-card p, .trait { font-size:7px!important; }
-  .stats div { padding:3px 1px!important; }
-  .auction-meta { grid-template-columns:1fr!important; gap:5px!important; }
-  .timer { width:78px!important; height:78px!important; margin:auto; }
-  .timer:before { width:69px!important; height:69px!important; }
-  .timer strong { font-size:28px!important; }
-  .current-price > strong { font-size:25px!important; }
-  .bid-feed { max-height:none!important; overflow-y:auto!important; }
-  .bid-dock { position:static!important; transform:none!important; width:100%!important; min-height:55px!important; padding:5px!important; grid-template-columns:145px minmax(0,1fr) 170px!important; gap:5px!important; border-radius:13px!important; }
-  .budget-read { min-height:45px!important; }
-  .quick-bids { grid-template-columns:repeat(4,minmax(0,1fr))!important; gap:4px!important; }
-  .quick-bids button, .custom-bid button, .custom-bid input { height:40px!important; min-height:40px!important; font-size:8px!important; padding:0 3px!important; }
-  .custom-bid { grid-template-columns:minmax(0,1fr) 58px!important; }
-  .room-chat.phase-auction { bottom:62px!important; }
-  .chat-window { top:55px!important; bottom:5px!important; height:auto!important; }
-  .formation-page { height:100dvh; overflow:hidden!important; padding-top:58px!important; }
-  .formation-layout { min-height:0; height:calc(100dvh - 155px); overflow:hidden; }
-  .formation-list, .bench-panel { min-height:0; overflow-y:auto; }
-  .lineup-center { min-height:0; overflow:hidden; }
-  .tactical-pitch { height:calc(100dvh - 220px)!important; min-height:310px!important; }
-}
-
-@media screen and (orientation:landscape) and (max-width:900px) and (max-height:500px) {
-  .secure-badge, .manager-board h3, .position-tracker small, .player-card .trait { display:none!important; }
-  .arena-grid { grid-template-columns:130px minmax(0,1fr) 125px!important; }
-  .position-tracker { grid-template-columns:repeat(2,1fr)!important; }
-  .bid-dock { grid-template-columns:120px minmax(0,1fr) 145px!important; }
-  .footballer-photo { height:105px!important; }
-  .stats span { font-size:5px!important; }
-}
-
-@keyframes ae-device-rotate { 0%,20%{transform:rotate(0)} 60%,100%{transform:rotate(90deg)} }
-
-
-/* v0.9 auction completion, exact roles, drag-and-drop formation */
 .player-roles { display:flex; justify-content:center; flex-wrap:wrap; gap:5px; margin:5px auto 8px; }
 .player-roles span { padding:3px 7px; border-radius:999px; border:1px solid rgba(255,255,255,.22); font-size:10px; font-weight:900; letter-spacing:.06em; }
 .player-roles span.primary { background:rgba(115,255,174,.18); border-color:rgba(115,255,174,.55); color:#baffd3; }
@@ -973,323 +910,263 @@ html, body, #root { width:100%; height:100%; min-height:100%; margin:0; overscro
 .complete-auction.done { opacity:.8; }
 .manager-line small { text-transform:uppercase; }
 .pitch-player.drag-target { outline:2px dashed rgba(116,222,255,.55); outline-offset:3px; }
-.pitch-player-content, .bench-list button { touch-action:none; user-select:none; -webkit-user-select:none; }
+.pitch-player-content, .bench-list button { user-select:none; -webkit-user-select:none; }
 .pitch-player-content[draggable="true"] { cursor:grab; }
 .pitch-player-content[draggable="true"]:active { cursor:grabbing; transform:scale(1.04); }
 .pitch-player-content em { display:block; margin-top:2px; font-size:7px; font-style:normal; font-weight:950; letter-spacing:.04em; }
 .fit-primary { color:#74ffad; }
 .fit-secondary { color:#ffd36b; }
 .fit-out-of-position { color:#ff7474; }
-
-@media (orientation: landscape) and (max-height: 650px) {
-  html, body, #root { height:100dvh; overflow:hidden; overscroll-behavior:none; }
-  .page, .arena, .formation-page { height:100dvh; min-height:0; overflow:hidden; }
-  .arena-top { min-height:38px; padding-block:4px; }
-  .arena-grid { min-height:0; overflow:hidden; }
-  .bid-dock { min-height:56px; padding-block:5px; }
-  .player-card { transform:scale(.88); transform-origin:center; }
-  .formation-header { padding-block:5px; }
-  .formation-layout { min-height:0; height:calc(100dvh - 76px); overflow:hidden; }
-  .formation-options, .bench-list, .tracker-list, .bid-feed { overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
-  .tactical-pitch { min-height:0; height:100%; }
-}
-
-/* v1.0 gameplay upgrade: fixed landscape viewport and touch-first auction UI */
-html, body, #root { width:100%; height:100%; margin:0; overflow:hidden; overscroll-behavior:none; }
-body { touch-action:manipulation; }
-.app-shell { width:100dvw; height:100dvh; min-height:0; overflow:hidden; }
-.page { min-height:0; }
-.arena { height:calc(100dvh - 72px); min-height:0; overflow:hidden; display:grid; grid-template-rows:auto minmax(0,1fr) auto; }
-.arena-grid { min-height:0; overflow:hidden; }
-.arena-left-stack, .manager-board, .bid-feed, .squad-tracker, .tracker-list, .bench-list, .chat-messages { min-height:0; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
-.manager-board, .bid-feed, .tracker-list, .bench-list, .chat-messages { overflow-y:auto; }
-.bid-dock { position:sticky; bottom:0; z-index:40; }
-.arena-controls button { min-height:42px; }
-.pitch-player.drag-valid { outline:3px solid #64ff9f; box-shadow:0 0 24px rgba(100,255,159,.55); }
-.pitch-player.drag-invalid { outline:3px solid #ff5d72; opacity:.62; }
-.pitch-player-content[draggable="true"]:active { transform:scale(1.08); z-index:20; }
-.drag-preview { position:absolute; right:-8px; top:-8px; z-index:5; min-width:30px; height:30px; border-radius:999px; display:grid; place-items:center; background:#fff; color:#07111f; font-weight:900; box-shadow:0 5px 16px rgba(0,0,0,.35); }
-.compact-mode .arena-top { padding-block:6px; }
-.compact-mode .player-card { transform:scale(.92); transform-origin:center; }
-.compact-mode .manager-board small, .compact-mode .secure-badge { display:none; }
-.comfortable-mode .arena-grid { gap:18px; }
-
-@media (orientation:landscape) and (max-height:700px) {
-  .topbar { height:52px; min-height:52px; padding-block:4px; }
-  .arena { height:calc(100dvh - 52px); }
-  .arena-top { padding:4px 10px; }
-  .arena-grid { gap:8px; padding:6px 8px; }
-  .bid-dock { padding:6px 8px; }
-  .player-card { max-height:52dvh; overflow:hidden; }
-  .player-card p, .player-card .trait, .arena-top > div:first-child span, .secure-badge { display:none; }
-  .quick-bids button, .custom-bid button, .arena-controls button { min-height:40px; min-width:44px; }
-  .auction-stage { display:flex; align-items:center; justify-content:center; min-height:0; overflow:hidden; }
-}
-
-@media (orientation:portrait) and (max-width:1024px) {
-  body::before { content:"Rotate your device to play Auction Eleven"; position:fixed; inset:0; z-index:2147483647; display:grid; place-items:center; padding:30px; text-align:center; font:800 clamp(24px,7vw,42px)/1.2 system-ui; color:white; background:radial-gradient(circle at top,#173e65,#050913 65%); }
-  #root { visibility:hidden; }
-}
 .manager-card { position:relative; }
 .replace-ai { margin-left:auto; padding:7px 10px; min-height:36px; font-size:10px; border:1px solid rgba(255,255,255,.2); border-radius:8px; }
 
-/* v1.0.2: portrait support and reliable touch/document scrolling */
-html,
-body {
-  width: 100%;
-  min-height: 100%;
+/* The document itself must remain scrollable. Do not lock html/body/root. */
+html { width:100%; min-height:100%; overflow-x:hidden; overflow-y:auto; overscroll-behavior-y:auto; }
+body { width:100%; min-height:100%; height:auto; overflow-x:hidden; overflow-y:auto; overscroll-behavior-y:auto; touch-action:pan-x pan-y; -webkit-overflow-scrolling:touch; }
+#root { width:100%; min-height:100%; height:auto; overflow:visible; visibility:visible!important; }
+.app-shell { width:100%; min-height:100dvh; height:auto; overflow:visible; }
+.landscape-warning { display:none!important; }
+.landscape-app { width:100%; min-height:100%; visibility:visible!important; pointer-events:auto!important; }
+.page { min-height:100dvh; height:auto; overflow:visible; }
+
+/* All intended scroll regions receive momentum scrolling and a real min-height. */
+.manager-board, .tracker-list, .bid-feed, .bench-list, .formation-options,
+.chat-messages, .pool-grid, .emoji-picker, .squads, .leaderboard, .awards {
+  min-height:0;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;
+  scrollbar-gutter:stable;
+}
+
+/* Let a finger swipe scroll normally. Native HTML drag still works with mouse/stylus. */
+.pitch-player-content, .bench-list button { touch-action:pan-y; }
+button, a, input, textarea, select { touch-action:manipulation; }
+
+/* Safe fixed dock on wide desktop screens only. */
+@media (min-width:1101px) {
+  .arena { padding-bottom:calc(126px + env(safe-area-inset-bottom)); }
+  .bid-dock { bottom:max(14px, env(safe-area-inset-bottom)); }
+}
+
+/* Tablets and phones: natural page scrolling in portrait and landscape. */
+@media (max-width:1100px) {
+  html, body, #root, .app-shell, .page, .arena, .formation-page {
+    height:auto!important;
+    min-height:100dvh!important;
+    overflow-x:hidden!important;
+    overflow-y:visible!important;
+  }
+  body { position:static!important; }
+  .page { padding-top:82px!important; padding-bottom:max(24px, env(safe-area-inset-bottom))!important; }
+  .arena { display:block!important; }
+  .arena-top { min-height:auto; align-items:flex-start; flex-wrap:wrap; }
+  .arena-controls { width:100%; overflow-x:auto; padding-bottom:4px; justify-content:flex-start; -webkit-overflow-scrolling:touch; }
+  .arena-controls > * { flex:0 0 auto; }
+  .arena-grid { display:flex!important; flex-direction:column; width:100%; min-height:0!important; height:auto!important; overflow:visible!important; }
+  .auction-stage { order:-2; width:100%; min-height:auto!important; height:auto!important; overflow:visible!important; padding:16px!important; grid-template-columns:minmax(0,1fr) minmax(120px,190px); }
+  .arena-left-stack { order:-1; min-height:0!important; height:auto!important; overflow:visible!important; }
+  .manager-board { max-height:360px; }
+  .bid-feed { max-height:280px!important; }
+  .bid-dock {
+    position:sticky!important;
+    z-index:55;
+    left:auto!important;
+    bottom:0!important;
+    transform:none!important;
+    width:100%!important;
+    margin-top:14px;
+    padding:10px 10px max(10px, env(safe-area-inset-bottom))!important;
+    grid-template-columns:1fr!important;
+    min-height:0!important;
+    border-radius:18px 18px 0 0!important;
+  }
+  .quick-bids { grid-template-columns:repeat(4,minmax(0,1fr))!important; }
+  .quick-bids button, .custom-bid button, .custom-bid input, .arena-controls button { min-height:44px; }
+  .room-chat { bottom:calc(84px + env(safe-area-inset-bottom)); right:12px; }
+
+  .formation-page { display:block!important; }
+  .formation-header { flex-wrap:wrap; align-items:flex-start; }
+  .formation-layout { display:flex!important; flex-direction:column; min-height:0!important; height:auto!important; overflow:visible!important; }
+  .formation-list, .lineup-center, .bench-panel { width:100%; height:auto!important; min-height:0!important; overflow:visible!important; }
+  .formation-options, .bench-list { max-height:360px; overflow-y:auto!important; }
+  .tactical-pitch { height:min(112vw,620px)!important; min-height:430px!important; margin:10px!important; }
+  .submit-lineup { position:sticky; bottom:0; z-index:40; padding-bottom:max(10px, env(safe-area-inset-bottom)); }
+
+  .modal-backdrop { padding:5px; align-items:stretch; overflow-y:auto; }
+  .pool-modal { width:100%; max-height:calc(100dvh - 10px); }
+}
+
+@media (max-width:760px) {
+  .page { padding-left:10px!important; padding-right:10px!important; }
+  .topbar { top:8px; width:calc(100% - 16px); height:54px; }
+  .topbar nav, .status-pill { display:none; }
+  .arena-top { gap:8px; margin-bottom:8px; }
+  .secure-badge, .live { display:none; }
+  .auction-stage { display:flex!important; flex-direction:column; gap:12px!important; }
+  .player-card { width:min(100%,360px); }
+  .footballer-photo { height:clamp(190px,58vw,280px); }
+  .auction-meta { width:100%; display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .timer { margin:auto; }
+  .budget-read { min-height:58px; }
+  .quick-bids { gap:6px!important; }
+  .quick-bids button { padding:0 5px!important; font-size:9px!important; }
+  .custom-bid { grid-template-columns:minmax(0,1fr) 84px!important; }
+  .manager-board { max-height:300px; }
+  .bid-feed { max-height:240px!important; }
+  .chat-window { position:fixed!important; inset:68px 6px calc(72px + env(safe-area-inset-bottom)) 6px!important; width:auto!important; height:auto!important; max-height:none!important; }
+  .formation-options { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .bench-list { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .tactical-pitch { height:min(125vw,570px)!important; min-height:420px!important; }
+  .pitch-player { width:68px; min-height:76px; }
+}
+
+@media (max-width:480px) {
+  .quick-bids { grid-template-columns:repeat(2,minmax(0,1fr))!important; }
+  .formation-options, .bench-list { grid-template-columns:1fr; }
+  .auction-meta { grid-template-columns:1fr; }
+  .tactical-pitch { height:min(145vw,540px)!important; min-height:400px!important; }
+}
+
+/* Short landscape phones also scroll instead of clipping content. */
+@media (orientation:landscape) and (max-height:650px) and (max-width:1100px) {
+  html, body, #root, .app-shell, .page, .arena, .formation-page { height:auto!important; min-height:100dvh!important; overflow-y:visible!important; }
+  .page { padding-top:66px!important; }
+  .arena-grid { display:grid!important; grid-template-columns:minmax(180px,.65fr) minmax(360px,1.4fr) minmax(170px,.65fr)!important; align-items:start; }
+  .auction-stage { order:0; display:grid!important; grid-template-columns:minmax(0,1fr) 120px; padding:8px!important; }
+  .arena-left-stack { order:0; }
+  .manager-board, .bid-feed { max-height:calc(100dvh - 165px)!important; overflow-y:auto!important; }
+  .footballer-photo { height:min(34dvh,170px)!important; }
+  .bid-dock { grid-column:1/-1; }
+  .formation-layout { display:grid!important; grid-template-columns:minmax(170px,.7fr) minmax(360px,1.5fr) minmax(170px,.7fr)!important; align-items:start; }
+  .formation-options, .bench-list { max-height:calc(100dvh - 145px)!important; }
+  .tactical-pitch { height:max(430px,calc(100dvh - 120px))!important; }
+}
+
+/* v1.0.4 — definitive mobile document scrolling and cross-device cleanup */
+:root { --ae-vh: 1vh; }
+html, body {
+  position: static !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-height: 100% !important;
   height: auto !important;
-  margin: 0;
-  overflow-x: hidden !important;
+  overflow-x: clip !important;
   overflow-y: auto !important;
   overscroll-behavior-y: auto !important;
-  -webkit-overflow-scrolling: touch;
+  -webkit-overflow-scrolling: touch !important;
+  touch-action: pan-y pinch-zoom !important;
 }
-
-body {
-  touch-action: pan-x pan-y !important;
-}
-
-#root,
-.app-shell,
-.landscape-app {
-  width: 100%;
-  min-height: 100vh;
-  min-height: 100dvh;
+body { min-height: calc(var(--ae-vh, 1vh) * 100) !important; }
+#root, .app-shell, .landscape-app {
+  position: static !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-height: calc(var(--ae-vh, 1vh) * 100) !important;
   height: auto !important;
   overflow: visible !important;
-}
-
-/* Remove every old landscape-only blocker. */
-.landscape-warning,
-body::before {
-  display: none !important;
-  content: none !important;
-}
-
-#root,
-.landscape-app {
   visibility: visible !important;
-  pointer-events: auto !important;
+  touch-action: pan-y pinch-zoom !important;
 }
-
-/* Normal pages use browser/document scrolling on every device. */
-.landing,
-.lobby.page,
-.results.page,
-.formation-wait.page,
-.round-result {
+.page, .landing, .lobby, .arena, .formation-page, .formation-wait, .results {
+  position: relative !important;
+  min-height: calc(var(--ae-vh, 1vh) * 100) !important;
   height: auto !important;
-  min-height: 100dvh !important;
+  max-height: none !important;
   overflow: visible !important;
+  touch-action: pan-y pinch-zoom !important;
 }
+.hero-video { pointer-events: none; }
+.landscape-warning, body::before { display: none !important; content: none !important; }
 
-/* Landscape gameplay stays compact, while intended panels scroll internally. */
-@media (orientation: landscape) and (min-width: 700px) {
-  .arena.page,
-  .formation-page.page {
-    height: 100dvh !important;
+/* Never let legacy full-screen locks survive on touch devices. */
+@media (hover: none), (pointer: coarse), (max-width: 1100px) {
+  html, body, #root, .app-shell, .landscape-app,
+  .page, .landing, .lobby, .arena, .formation-page, .formation-wait, .results {
+    position: static !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow-x: clip !important;
+    overflow-y: visible !important;
+  }
+  html, body { overflow-y: auto !important; }
+
+  .landing-hero { min-height: calc(var(--ae-vh, 1vh) * 100); overflow: hidden; }
+  .landing-section, .play-section { padding-top: 72px; padding-bottom: 72px; }
+  .page { width: 100% !important; padding-left: 12px !important; padding-right: 12px !important; }
+
+  .lobby-grid, .arena-grid, .formation-layout, .results-grid, .squad-grid {
     min-height: 0 !important;
-    overflow: hidden !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  .panel, .managers-panel, .settings, .manager-board, .bid-feed,
+  .formation-list, .lineup-center, .bench-panel, .leaderboard, .awards, .squads {
+    min-height: 0 !important;
+    height: auto !important;
+    max-height: none !important;
   }
 
-  .arena.page .manager-board,
-  .arena.page .bid-feed,
-  .arena.page .tracker-list,
-  .formation-page.page .formation-options,
-  .formation-page.page .bench-list,
-  .room-chat .chat-messages,
-  .pool-modal .pool-grid {
+  /* Internal lists scroll only when useful, while the page always remains scrollable. */
+  .manager-cards, .tracker-list, .formation-options, .bench-list,
+  .chat-messages, .pool-grid, .emoji-picker {
     overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
     overscroll-behavior: contain;
-    -webkit-overflow-scrolling: touch;
-    touch-action: pan-y;
+    touch-action: pan-y !important;
   }
-}
+  .manager-cards { max-height: min(52vh, 440px) !important; }
+  .tracker-list { max-height: min(42vh, 320px) !important; }
+  .formation-options, .bench-list { max-height: min(52vh, 420px) !important; }
+  .bid-feed { max-height: none !important; overflow: visible !important; }
+  .manager-board { display: block !important; overflow: visible !important; }
 
-/* Phones and tablets can play naturally in portrait. */
-@media (orientation: portrait), (max-width: 699px) {
-  html,
-  body,
-  #root,
-  .app-shell {
-    height: auto !important;
-    min-height: 100dvh !important;
-    overflow-x: hidden !important;
-    overflow-y: auto !important;
-  }
-
-  .topbar {
-    top: 8px;
-    width: calc(100% - 16px);
-    height: 54px;
-    padding: 7px 9px;
-  }
-
-  .topbar nav,
-  .status-pill {
-    display: none;
-  }
-
-  .page {
-    width: calc(100% - 12px) !important;
-    padding-top: 72px !important;
-    padding-bottom: 28px !important;
-  }
-
-  .arena.page,
-  .formation-page.page {
-    display: block !important;
-    height: auto !important;
-    min-height: 100dvh !important;
-    overflow: visible !important;
-    padding-bottom: 155px !important;
-  }
-
-  .arena-top,
-  .formation-header {
-    position: relative;
-    height: auto !important;
-    min-height: 0 !important;
-    overflow: visible !important;
-  }
-
-  .arena-grid,
-  .formation-layout {
-    display: flex !important;
-    flex-direction: column !important;
-    width: 100%;
-    height: auto !important;
-    min-height: 0 !important;
-    overflow: visible !important;
-    gap: 10px !important;
-  }
-
-  .arena-left-stack {
-    display: flex !important;
-    flex-direction: column !important;
-    height: auto !important;
-    overflow: visible !important;
-  }
-
-  .auction-stage,
-  .lineup-center,
-  .formation-list,
-  .bench-panel,
-  .manager-board,
-  .bid-feed {
-    width: 100%;
-    height: auto !important;
-    min-height: 0 !important;
-    max-height: none !important;
-  }
-
-  .auction-stage {
-    display: flex !important;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 14px 8px !important;
-    overflow: visible !important;
-  }
-
-  .player-card {
-    width: min(100%, 360px) !important;
-    max-height: none !important;
+  /* A sticky dock participates in document flow and cannot cover the final content. */
+  .arena { padding-bottom: max(24px, env(safe-area-inset-bottom)) !important; }
+  .bid-dock {
+    position: sticky !important;
+    left: auto !important;
+    right: auto !important;
+    bottom: 0 !important;
     transform: none !important;
+    width: 100% !important;
+    margin: 16px 0 0 !important;
+    padding-bottom: max(10px, env(safe-area-inset-bottom)) !important;
   }
+  .room-chat.phase-auction { bottom: calc(88px + env(safe-area-inset-bottom)) !important; }
 
-  .manager-board,
-  .bid-feed,
-  .tracker-list,
-  .formation-options,
-  .bench-list,
-  .chat-messages,
-  .pool-grid {
-    overflow-y: auto !important;
-    overscroll-behavior: contain;
-    -webkit-overflow-scrolling: touch;
-    touch-action: pan-y;
-  }
-
-  .manager-board,
-  .bid-feed {
-    max-height: 42dvh !important;
-  }
-
-  .formation-list,
-  .bench-panel {
-    max-height: 52dvh !important;
-    overflow: hidden !important;
-  }
-
-  .formation-options,
-  .bench-list {
-    max-height: 43dvh !important;
-  }
+  /* Avoid touch handlers swallowing vertical swipes. Tap-to-swap remains available. */
+  button, a, input, textarea, select { touch-action: manipulation !important; }
+  .pitch-player, .pitch-player-content, .bench-list button,
+  .manager-cards, .pool-grid, .formation-options { touch-action: pan-y !important; }
+  .pitch-player-content { pointer-events: auto !important; }
 
   .tactical-pitch {
-    width: calc(100% - 12px);
-    height: min(118vw, 650px) !important;
-    min-height: 500px !important;
-    margin: 6px !important;
+    height: clamp(430px, 118vw, 650px) !important;
+    min-height: 430px !important;
+    max-height: none !important;
   }
+  .submit-lineup { position: sticky; bottom: 0; z-index: 45; }
 
-  .pitch-player {
-    width: clamp(58px, 18vw, 82px);
+  .modal-backdrop {
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    touch-action: pan-y !important;
   }
+  .pool-modal { max-height: calc(var(--ae-vh, 1vh) * 100 - 10px) !important; }
+  .chat-window { max-height: calc(var(--ae-vh, 1vh) * 100 - 76px) !important; }
+}
 
-  .pitch-player strong {
-    max-width: 70px;
-  }
+@media (max-width: 560px) {
+  .arena { padding-bottom: max(20px, env(safe-area-inset-bottom)) !important; }
+  .manager-board { display: block !important; }
+  .arena-left-stack { display: flex !important; flex-direction: column !important; }
+  .auction-stage { overflow: visible !important; }
+  .quick-bids { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .room-chat.phase-auction { bottom: calc(82px + env(safe-area-inset-bottom)) !important; }
+}
 
-  .bid-dock {
-    position: fixed !important;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 60;
-    width: 100%;
-    max-height: 145px;
-    overflow-y: auto;
-    padding: 7px 8px calc(7px + env(safe-area-inset-bottom));
-    background: rgba(10, 11, 13, .97);
-    backdrop-filter: blur(16px);
-    border-top: 1px solid rgba(255,255,255,.12);
-  }
-
-  .quick-bids {
-    display: grid !important;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 6px;
-  }
-
-  .quick-bids button,
-  .custom-bid button,
-  .arena-controls button {
-    min-height: 44px !important;
-    touch-action: manipulation;
-  }
-
-  .custom-bid {
-    width: 100%;
-  }
-
-  .room-chat {
-    right: 10px;
-    bottom: calc(155px + env(safe-area-inset-bottom));
-  }
-
-  .chat-window {
-    position: fixed;
-    inset: 68px 8px calc(8px + env(safe-area-inset-bottom));
-    width: auto;
-    height: auto;
-    max-height: none;
-  }
-
-  .pool-modal {
-    width: 100%;
-    max-height: calc(100dvh - 8px);
-  }
+@supports not (overflow: clip) {
+  html, body, #root { overflow-x: hidden !important; }
 }

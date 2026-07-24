@@ -185,6 +185,35 @@ function App() {
   const [isLoading, setIsLoading] = useState(() => !sessionStorage.getItem("ae_intro_seen"));
 
   useEffect(() => {
+    const updateViewportHeight = () => {
+      document.documentElement.style.setProperty("--ae-vh", `${window.innerHeight * 0.01}px`);
+    };
+    const unlockDocumentScroll = () => {
+      const html = document.documentElement;
+      const body = document.body;
+      html.style.removeProperty("overflow");
+      html.style.removeProperty("height");
+      body.style.removeProperty("overflow");
+      body.style.removeProperty("height");
+      body.style.removeProperty("position");
+      body.style.removeProperty("top");
+      body.style.removeProperty("width");
+      updateViewportHeight();
+    };
+    unlockDocumentScroll();
+    window.addEventListener("resize", updateViewportHeight, { passive: true });
+    window.addEventListener("orientationchange", unlockDocumentScroll, { passive: true });
+    window.visualViewport?.addEventListener("resize", updateViewportHeight, { passive: true });
+    window.addEventListener("pageshow", unlockDocumentScroll, { passive: true });
+    return () => {
+      window.removeEventListener("resize", updateViewportHeight);
+      window.removeEventListener("orientationchange", unlockDocumentScroll);
+      window.visualViewport?.removeEventListener("resize", updateViewportHeight);
+      window.removeEventListener("pageshow", unlockDocumentScroll);
+    };
+  }, []);
+
+  useEffect(() => {
     socket.on("connect", () => {
       setConnected(true);
       const code = localStorage.getItem("ae_room");
@@ -514,12 +543,17 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
     localStorage.setItem("ae_compact", next ? "1" : "0");
     return next;
   });
+  const [isFullscreen, setIsFullscreen] = useState(() => Boolean(document.fullscreenElement));
+  useEffect(() => {
+    const syncFullscreen = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", syncFullscreen);
+    return () => document.removeEventListener("fullscreenchange", syncFullscreen);
+  }, []);
   const enterFullscreen = async () => {
     try {
-      if (!document.fullscreenElement) await document.documentElement.requestFullscreen?.();
-      const orientation = screen.orientation as ScreenOrientation & { lock?: (value: "landscape") => Promise<void> };
-      await orientation.lock?.("landscape");
-    } catch { /* browser may not support orientation lock */ }
+      if (document.fullscreenElement) await document.exitFullscreen?.();
+      else await document.documentElement.requestFullscreen?.();
+    } catch { /* fullscreen may not be supported or permitted */ }
   };
   const previousRound = useRef(state.roundIndex);
   useEffect(() => {
@@ -561,7 +595,7 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
   };
   const quitSolo = () => leave();
   if (state.phase === "round_result") return <RoundResult state={state} />;
-  return <main className={`arena page ${compactMode ? "compact-mode" : "comfortable-mode"}`}><div className="arena-top"><div><span>ROOM {state.code}</span><b>ROUND {state.roundIndex + 1}/{state.totalRounds}</b></div><div className="arena-controls"><div className="live"><i /> LIVE AUCTION</div><div className="secure-badge" title="Budgets and bids are validated by the server">🔒 SERVER SECURE</div><button type="button" onClick={enterFullscreen}>⛶ FULLSCREEN</button><button type="button" onClick={toggleCompactMode}>{compactMode ? "COMFORT" : "COMPACT"}</button><button aria-label="Send fire reaction" onClick={() => socket.emit("room:reaction", { code: state.code, reaction: "🔥" })}>🔥</button>{state.isSolo && <button className="quit-match" onClick={quitSolo}>QUIT MATCH</button>}</div></div>
+  return <main className={`arena page ${compactMode ? "compact-mode" : "comfortable-mode"}`}><div className="arena-top"><div><span>ROOM {state.code}</span><b>ROUND {state.roundIndex + 1}/{state.totalRounds}</b></div><div className="arena-controls"><div className="live"><i /> LIVE AUCTION</div><div className="secure-badge" title="Budgets and bids are validated by the server">🔒 SERVER SECURE</div><button type="button" onClick={enterFullscreen}>⛶ {isFullscreen ? "EXIT FULLSCREEN" : "FULLSCREEN"}</button><button type="button" onClick={toggleCompactMode}>{compactMode ? "COMFORT" : "COMPACT"}</button><button aria-label="Send fire reaction" onClick={() => socket.emit("room:reaction", { code: state.code, reaction: "🔥" })}>🔥</button>{state.isSolo && <button className="quit-match" onClick={quitSolo}>QUIT MATCH</button>}</div></div>
     <div className="arena-grid"><div className="arena-left-stack"><SquadTracker squad={me.squad} currentPosition={state.currentFootballer?.position} squadSize={state.settings.squadSize} /><aside className="panel manager-board"><h3>ROOM SQUADS</h3>{state.managers.map(manager => <div className={`manager-line ${manager.id === state.highestBidderId ? "leading" : ""} ${manager.id === managerId ? "you" : ""}`} key={manager.id}><span className="mini-avatar">{manager.avatar}</span><div><b>{manager.name}</b><small>{manager.auctionComplete ? "SQUAD COMPLETE" : `${manager.squad.length}/${getMaximumSquadSize(state.settings.squadSize)} · ${Math.max(0, getMaximumSquadSize(state.settings.squadSize) - manager.squad.length)} spots left`}</small></div><strong>{money(manager.budget)}</strong></div>)}</aside></div>
       <section className="auction-stage">{state.currentFootballer && <PlayerCard player={state.currentFootballer} />}<div className="auction-meta"><div className="timer" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><div><strong>{Math.ceil(seconds)}</strong><span>SEC</span></div></div><div className="current-price"><span>CURRENT BID</span><strong>{money(state.currentBid || state.settings.minimumBid)}</strong><p>{state.highestBidderId ? `${state.managers.find(manager => manager.id === state.highestBidderId)?.name} leads` : "Opening bid"}</p></div></div></section>
       <aside className="panel bid-feed"><h3>BID FEED</h3>{state.bidHistory.length === 0 ? <div className="empty-feed">No bids yet.<br />Make the first move.</div> : state.bidHistory.map((bid, index) => <div className={`feed-row ${index === 0 ? "latest" : ""}`} key={bid.id}><span>{bid.managerName}</span><b>{money(bid.amount)}</b></div>)}</aside></div>
@@ -846,8 +880,5 @@ function Results({ state, managerId, leave }: { state: RoomState; managerId: str
 function SquadRow({ entry }: { entry: SquadEntry }) { return <p><FootballerPhoto player={entry.footballer} compact /><span>{entry.footballer.position}</span><em>{entry.footballer.name}</em><b>{entry.footballer.overall}</b></p>; }
 
 
-createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+
+createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);

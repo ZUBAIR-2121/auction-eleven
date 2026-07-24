@@ -1032,3 +1032,81 @@ body { touch-action:manipulation; }
 }
 .manager-card { position:relative; }
 .replace-ai { margin-left:auto; padding:7px 10px; min-height:36px; font-size:10px; border:1px solid rgba(255,255,255,.2); border-radius:8px; }
+
+/* v1.0.1 scrolling repair
+   Public pages scroll normally. Only the live auction and formation editor
+   stay locked to the viewport, with their internal panels scrolling. */
+html,
+body {
+  width: 100%;
+  min-height: 100%;
+  height: auto;
+  margin: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: auto;
+}
+
+#root {
+  width: 100%;
+  min-height: 100vh;
+  height: auto;
+  overflow: visible;
+}
+
+.app-shell,
+.landscape-app {
+  width: 100%;
+  min-height: 100vh;
+  height: auto;
+  overflow: visible;
+}
+
+/* Landing, lobby, results and waiting screens must use document scrolling. */
+.landing,
+.lobby.page,
+.results.page,
+.formation-wait.page,
+.round-result {
+  height: auto !important;
+  min-height: 100vh !important;
+  overflow: visible !important;
+}
+
+/* Keep only active gameplay screens fixed to the device viewport. */
+.arena.page,
+.formation-page.page {
+  height: 100dvh !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.arena.page .manager-board,
+.arena.page .bid-feed,
+.arena.page .tracker-list,
+.formation-page.page .formation-options,
+.formation-page.page .bench-list,
+.room-chat .chat-messages,
+.pool-modal .pool-grid {
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Do not let the small-landscape rule accidentally lock lobby/results pages. */
+@media screen and (orientation: landscape) and (max-height: 700px) {
+  .lobby.page,
+  .results.page,
+  .formation-wait.page {
+    height: auto !important;
+    min-height: 100vh !important;
+    overflow: visible !important;
+    padding-top: 88px !important;
+  }
+
+  .landing {
+    height: auto !important;
+    min-height: 100vh !important;
+    overflow: visible !important;
+  }
+}

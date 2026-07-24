@@ -45,6 +45,7 @@ io.on("connection",socket=>{
   socket.on("room:join",(payload,ack)=>safeAck(ack,()=>{const result=rooms.join(payload.code,payload.name,payload.sessionId,socket.id);managerId=result.managerId;roomCode=result.code;socket.join(result.code);socket.emit("room:state",rooms.getState(result.code));return result;}));
   socket.on("room:resume",(payload,ack)=>safeAck(ack,()=>{const result=rooms.resume(payload.code,payload.sessionId,socket.id);managerId=result.managerId;roomCode=payload.code.toUpperCase();socket.join(roomCode);socket.emit("room:state",rooms.getState(roomCode));return result;}));
   socket.on("room:leave",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.leave(payload.code,managerId);socket.leave(payload.code.toUpperCase());managerId=null;roomCode=null;return null;}));
+  socket.on("room:replaceWithAI",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.replaceWithAI(payload.code,managerId,payload.managerId);return null;}));
   socket.on("room:ready",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.setReady(payload.code,managerId,payload.ready);return null;}));
   socket.on("room:updateSettings",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.updateSettings(payload.code,managerId,payload.settings);return null;}));
   socket.on("room:updatePlayerPool",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.updatePlayerPool(payload.code,managerId,payload.selectedFootballerIds);return null;}));
@@ -52,6 +53,7 @@ io.on("connection",socket=>{
   socket.on("game:quitSolo",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.quitSolo(payload.code,managerId);managerId=null;roomCode=null;return null;}));
   socket.on("auction:bid",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.bid(payload.code,managerId,payload.amount,payload.requestId,payload.roundId);return null;}));
   socket.on("auction:pass",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.pass(payload.code,managerId,payload.roundId);return null;}));
+  socket.on("auction:complete",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.completeAuction(payload.code,managerId);return null;}));
   socket.on("lineup:submit",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.submitLineup(payload.code,managerId,payload.formationId,payload.picks);return null;}));
   socket.on("room:reaction",payload=>{if(managerId)rooms.reaction(payload.code,managerId,payload.reaction);});
   socket.on("chat:send",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.sendChat(payload.code,managerId,payload.text);return null;}));

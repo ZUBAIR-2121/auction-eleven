@@ -1,43 +1,32 @@
-AUCTION ELEVEN COMPLETE UPGRADE
+AUCTION ELEVEN v1.0 GAMEPLAY UPGRADE
 
-INCLUDED CHANGES
-- Starting squad choices: 6, 7, 8, 9, 10, or 11.
-- Every manager can purchase up to 10 substitutes after completing the starting squad, while budget remains.
-- Maximum squad size is starting squad + 10 substitutes.
-- Server validates the substitute limit and protects the budget needed to finish the starting squad.
-- PASS PLAYER button for the current footballer.
-- A manager who passes cannot bid again during that footballer's current round.
-- If every eligible manager passes, the auction round ends immediately.
-- Passed managers are excluded from automatic unsold-player assignment.
-- Portrait phones/tablets show a rotate-device screen.
-- Landscape gameplay is fitted to the device viewport.
-- Main page scrolling is disabled during short landscape gameplay; only internal panels scroll.
-- Compact phone and tablet landscape layouts are included.
+Included:
+- 12-second auction rounds (host can choose 10-30 seconds)
+- Late bids reset the countdown to exactly 5 seconds
+- Immediate resolution when every challenger passes
+- Immediate sale when only the leading bidder remains
+- 2-second SOLD screen and automatic next round
+- Existing Pass Player and I'm Done controls retained
+- Fullscreen landscape button
+- Compact/Comfort UI toggle saved per device
+- Fixed 100dvh game viewport with no full-page scrolling
+- Only squad, bid feed, chat and substitute panels scroll
+- Larger landscape touch controls and centered player card
+- Better squad budget/open-slot details during bidding
+- Tap-to-swap and hold/drag formation editing
+- Valid slots glow green, invalid slots glow red
+- Dragged card feedback, position OVR preview and vibration
+- Session resume after refresh remains enabled
 
-HOW TO INSTALL
-1. Close the running local game.
-2. Extract this ZIP.
-3. Copy the folders inside over your existing auction-eleven project folder.
-4. Allow Windows to replace the six matching files.
+INSTALL:
+1. Extract this ZIP into C:\Auction\auction-eleven
+2. Choose Replace files in destination.
+3. Run:
+   npm install
+   npm run build
+4. Deploy:
+   git add .
+   git commit -m "Upgrade auction speed mobile UI and formation controls"
+   git push origin main
 
-BUILD FROM THE PROJECT ROOT
-cd C:\Auction\auction-eleven
-npm install
-npm run build
-
-UPDATE THE LIVE WEBSITE
-After the build succeeds, run:
-git add .
-git commit -m "Add substitutes pass button and landscape gameplay"
-git push origin main
-
-WHAT HAPPENS NEXT
-- Vercel automatically rebuilds the frontend.
-- Render automatically rebuilds the backend.
-- Keep the existing Vercel and Render projects and environment variables.
-- Wait until both deployments show successful/live.
-- Open https://auction-eleven-web.vercel.app
-- On desktop, use Ctrl+Shift+R for a hard refresh.
-
-IMPORTANT
-Both Render and Vercel must finish deploying because this upgrade changes shared socket events, backend auction rules, and frontend controls.
+Vercel and Render will redeploy automatically.

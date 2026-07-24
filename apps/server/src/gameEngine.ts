@@ -1,6 +1,7 @@
 import {
   FORMATION_BY_ID,
   FORMATIONS,
+  getFootballerRoles,
   getMaximumSquadSize,
   type Footballer,
   type FormationDefinition,
@@ -18,9 +19,9 @@ export const DEFAULT_SETTINGS: GameSettings = {
   startingBudget: 1000,
   minimumBid: 1,
   bidIncrement: 1,
-  auctionSeconds: 60,
+  auctionSeconds: 12,
   squadSize: 11,
-  antiSnipeSeconds: 3,
+  antiSnipeSeconds: 5,
   formationSeconds: 180,
   botDifficulty: "Professional",
   managerLimit: 6,
@@ -82,8 +83,10 @@ function roleAbility(player: Footballer, role: LineupRole): number {
 
 export function calculatePlayerSlotFit(player: Footballer, role: LineupRole): number {
   const required = rolePosition(role);
-  const positionScore = player.position === required ? 100 : player.secondary.includes(required) ? 78 : 28;
-  return clamp(roleAbility(player, role) * .72 + positionScore * .28);
+  const playableRoles = getFootballerRoles(player);
+  const primaryRole = playableRoles[0];
+  const positionScore = primaryRole === role ? 100 : playableRoles.includes(role) ? 86 : player.position === required ? 72 : player.secondary.includes(required) ? 58 : 22;
+  return clamp(roleAbility(player, role) * .68 + positionScore * .32);
 }
 
 function greedyLineup(squad: SquadEntry[], formation: FormationDefinition): LineupAssignment[] {

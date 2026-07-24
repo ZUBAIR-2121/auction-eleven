@@ -118,6 +118,40 @@ export interface Footballer {
   isRealPlayer: boolean;
 }
 
+export function getFootballerRoles(player: Footballer): LineupRole[] {
+  if (player.position === "GK") return ["GK"];
+  const roles: LineupRole[] = [];
+  const add = (...items: LineupRole[]) => items.forEach(role => { if (!roles.includes(role)) roles.push(role); });
+  if (player.position === "DEF") {
+    if (player.pace >= 82 && player.passing >= 72) add("LB", "RB", "LWB", "RWB");
+    add("CB");
+    if (player.passing >= 76 && player.defending >= 76) add("CDM");
+  } else if (player.position === "MID") {
+    if (player.defending >= 76) add("CDM", "CM");
+    else add("CM");
+    if (player.dribbling >= 82 || player.shooting >= 78) add("CAM");
+    if (player.pace >= 80) add("LM", "RM");
+    if (player.pace >= 86 && player.dribbling >= 82) add("LW", "RW");
+  } else {
+    add("ST", "CF");
+    if (player.pace >= 84 && player.dribbling >= 80) add("LW", "RW");
+    if (player.passing >= 78 && player.dribbling >= 82) add("CAM");
+    if (player.physical >= 78 && player.defending >= 55) add("LM", "RM");
+  }
+  for (const secondary of player.secondary) {
+    if (secondary === "DEF") add("CB", "LB", "RB");
+    if (secondary === "MID") add("CM", "CAM", "CDM", "LM", "RM");
+    if (secondary === "FWD") add("ST", "CF", "LW", "RW");
+  }
+  return roles.slice(0, 6);
+}
+
+export function getRoleFitLabel(player: Footballer, role: LineupRole): "PRIMARY" | "SECONDARY" | "OUT OF POSITION" {
+  const roles = getFootballerRoles(player);
+  if (roles[0] === role || (role === "CB" && player.position === "DEF") || (role === "CM" && player.position === "MID") || (role === "ST" && player.position === "FWD")) return "PRIMARY";
+  return roles.includes(role) ? "SECONDARY" : "OUT OF POSITION";
+}
+
 export interface FootballerPhoto {
   url: string;
   originalUrl: string;
@@ -159,6 +193,7 @@ export interface ManagerView {
   lineup: LineupAssignment[];
   lineupSubmitted: boolean;
   lineupScore: number;
+  auctionComplete: boolean;
 }
 
 export interface BidEntry {
@@ -248,6 +283,7 @@ export interface ClientToServerEvents {
   "room:join": (payload: { code: string; name: string; sessionId: string }, ack: Ack<{ code: string; managerId: string }>) => void;
   "room:resume": (payload: { code: string; sessionId: string }, ack: Ack<{ managerId: string }>) => void;
   "room:leave": (payload: { code: string }, ack: Ack<null>) => void;
+  "room:replaceWithAI": (payload: { code: string; managerId: string }, ack: Ack<null>) => void;
   "room:ready": (payload: { code: string; ready: boolean }, ack: Ack<null>) => void;
   "room:updateSettings": (payload: { code: string; settings: Partial<GameSettings> }, ack: Ack<null>) => void;
   "room:updatePlayerPool": (payload: { code: string; selectedFootballerIds: string[] }, ack: Ack<null>) => void;
@@ -255,6 +291,7 @@ export interface ClientToServerEvents {
   "game:quitSolo": (payload: { code: string }, ack: Ack<null>) => void;
   "auction:bid": (payload: { code: string; amount: number; requestId: string; roundId: string }, ack: Ack<null>) => void;
   "auction:pass": (payload: { code: string; roundId: string }, ack: Ack<null>) => void;
+  "auction:complete": (payload: { code: string }, ack: Ack<null>) => void;
   "lineup:submit": (payload: { code: string; formationId: string; picks: LineupPick[] }, ack: Ack<null>) => void;
   "room:reaction": (payload: { code: string; reaction: string }) => void;
   "chat:send": (payload: { code: string; text: string }, ack: Ack<null>) => void;

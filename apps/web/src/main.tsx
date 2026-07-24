@@ -846,13 +846,8 @@ function Results({ state, managerId, leave }: { state: RoomState; managerId: str
 function SquadRow({ entry }: { entry: SquadEntry }) { return <p><FootballerPhoto player={entry.footballer} compact /><span>{entry.footballer.position}</span><em>{entry.footballer.name}</em><b>{entry.footballer.overall}</b></p>; }
 
 
-function LandscapeGuard({ children }: { children: React.ReactNode }) {
-  return <>
-    <div className="landscape-warning" role="alert" aria-live="assertive">
-      <div className="landscape-warning-card"><div className="rotate-phone">↻</div><h1>Rotate Your Device</h1><p>Auction Eleven is designed for landscape play.</p></div>
-    </div>
-    <div className="landscape-app">{children}</div>
-  </>;
-}
-
-createRoot(document.getElementById("root")!).render(<React.StrictMode><LandscapeGuard><App /></LandscapeGuard></React.StrictMode>);
+createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);

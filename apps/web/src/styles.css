@@ -1033,80 +1033,263 @@ body { touch-action:manipulation; }
 .manager-card { position:relative; }
 .replace-ai { margin-left:auto; padding:7px 10px; min-height:36px; font-size:10px; border:1px solid rgba(255,255,255,.2); border-radius:8px; }
 
-/* v1.0.1 scrolling repair
-   Public pages scroll normally. Only the live auction and formation editor
-   stay locked to the viewport, with their internal panels scrolling. */
+/* v1.0.2: portrait support and reliable touch/document scrolling */
 html,
 body {
   width: 100%;
   min-height: 100%;
-  height: auto;
+  height: auto !important;
   margin: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior-y: auto;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior-y: auto !important;
+  -webkit-overflow-scrolling: touch;
 }
 
-#root {
-  width: 100%;
-  min-height: 100vh;
-  height: auto;
-  overflow: visible;
+body {
+  touch-action: pan-x pan-y !important;
 }
 
+#root,
 .app-shell,
 .landscape-app {
   width: 100%;
   min-height: 100vh;
-  height: auto;
-  overflow: visible;
+  min-height: 100dvh;
+  height: auto !important;
+  overflow: visible !important;
 }
 
-/* Landing, lobby, results and waiting screens must use document scrolling. */
+/* Remove every old landscape-only blocker. */
+.landscape-warning,
+body::before {
+  display: none !important;
+  content: none !important;
+}
+
+#root,
+.landscape-app {
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+/* Normal pages use browser/document scrolling on every device. */
 .landing,
 .lobby.page,
 .results.page,
 .formation-wait.page,
 .round-result {
   height: auto !important;
-  min-height: 100vh !important;
+  min-height: 100dvh !important;
   overflow: visible !important;
 }
 
-/* Keep only active gameplay screens fixed to the device viewport. */
-.arena.page,
-.formation-page.page {
-  height: 100dvh !important;
-  min-height: 0 !important;
-  overflow: hidden !important;
-}
-
-.arena.page .manager-board,
-.arena.page .bid-feed,
-.arena.page .tracker-list,
-.formation-page.page .formation-options,
-.formation-page.page .bench-list,
-.room-chat .chat-messages,
-.pool-modal .pool-grid {
-  overflow-y: auto !important;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-}
-
-/* Do not let the small-landscape rule accidentally lock lobby/results pages. */
-@media screen and (orientation: landscape) and (max-height: 700px) {
-  .lobby.page,
-  .results.page,
-  .formation-wait.page {
-    height: auto !important;
-    min-height: 100vh !important;
-    overflow: visible !important;
-    padding-top: 88px !important;
+/* Landscape gameplay stays compact, while intended panels scroll internally. */
+@media (orientation: landscape) and (min-width: 700px) {
+  .arena.page,
+  .formation-page.page {
+    height: 100dvh !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
   }
 
-  .landing {
+  .arena.page .manager-board,
+  .arena.page .bid-feed,
+  .arena.page .tracker-list,
+  .formation-page.page .formation-options,
+  .formation-page.page .bench-list,
+  .room-chat .chat-messages,
+  .pool-modal .pool-grid {
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+  }
+}
+
+/* Phones and tablets can play naturally in portrait. */
+@media (orientation: portrait), (max-width: 699px) {
+  html,
+  body,
+  #root,
+  .app-shell {
     height: auto !important;
-    min-height: 100vh !important;
+    min-height: 100dvh !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+
+  .topbar {
+    top: 8px;
+    width: calc(100% - 16px);
+    height: 54px;
+    padding: 7px 9px;
+  }
+
+  .topbar nav,
+  .status-pill {
+    display: none;
+  }
+
+  .page {
+    width: calc(100% - 12px) !important;
+    padding-top: 72px !important;
+    padding-bottom: 28px !important;
+  }
+
+  .arena.page,
+  .formation-page.page {
+    display: block !important;
+    height: auto !important;
+    min-height: 100dvh !important;
     overflow: visible !important;
+    padding-bottom: 155px !important;
+  }
+
+  .arena-top,
+  .formation-header {
+    position: relative;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  .arena-grid,
+  .formation-layout {
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100%;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    gap: 10px !important;
+  }
+
+  .arena-left-stack {
+    display: flex !important;
+    flex-direction: column !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .auction-stage,
+  .lineup-center,
+  .formation-list,
+  .bench-panel,
+  .manager-board,
+  .bid-feed {
+    width: 100%;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+  }
+
+  .auction-stage {
+    display: flex !important;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 14px 8px !important;
+    overflow: visible !important;
+  }
+
+  .player-card {
+    width: min(100%, 360px) !important;
+    max-height: none !important;
+    transform: none !important;
+  }
+
+  .manager-board,
+  .bid-feed,
+  .tracker-list,
+  .formation-options,
+  .bench-list,
+  .chat-messages,
+  .pool-grid {
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+  }
+
+  .manager-board,
+  .bid-feed {
+    max-height: 42dvh !important;
+  }
+
+  .formation-list,
+  .bench-panel {
+    max-height: 52dvh !important;
+    overflow: hidden !important;
+  }
+
+  .formation-options,
+  .bench-list {
+    max-height: 43dvh !important;
+  }
+
+  .tactical-pitch {
+    width: calc(100% - 12px);
+    height: min(118vw, 650px) !important;
+    min-height: 500px !important;
+    margin: 6px !important;
+  }
+
+  .pitch-player {
+    width: clamp(58px, 18vw, 82px);
+  }
+
+  .pitch-player strong {
+    max-width: 70px;
+  }
+
+  .bid-dock {
+    position: fixed !important;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 60;
+    width: 100%;
+    max-height: 145px;
+    overflow-y: auto;
+    padding: 7px 8px calc(7px + env(safe-area-inset-bottom));
+    background: rgba(10, 11, 13, .97);
+    backdrop-filter: blur(16px);
+    border-top: 1px solid rgba(255,255,255,.12);
+  }
+
+  .quick-bids {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .quick-bids button,
+  .custom-bid button,
+  .arena-controls button {
+    min-height: 44px !important;
+    touch-action: manipulation;
+  }
+
+  .custom-bid {
+    width: 100%;
+  }
+
+  .room-chat {
+    right: 10px;
+    bottom: calc(155px + env(safe-area-inset-bottom));
+  }
+
+  .chat-window {
+    position: fixed;
+    inset: 68px 8px calc(8px + env(safe-area-inset-bottom));
+    width: auto;
+    height: auto;
+    max-height: none;
+  }
+
+  .pool-modal {
+    width: 100%;
+    max-height: calc(100dvh - 8px);
   }
 }

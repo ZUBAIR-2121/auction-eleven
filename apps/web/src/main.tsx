@@ -8,6 +8,8 @@ import {
   FORMATION_BY_ID,
   getMaximumSquadSize,
   getSquadPositionTargets,
+  getFootballerRoles,
+  getRoleFitLabel,
   MAX_SUBSTITUTES,
   type BotDifficulty,
   type ClientToServerEvents,
@@ -476,7 +478,7 @@ function useCountdown(endsAt: number | null) {
   return endsAt ? Math.max(0, (endsAt - now) / 1000) : 0;
 }
 
-function PlayerCard({ player }: { player: Footballer }) { return <motion.div key={player.id} initial={{ opacity: 0, scale: .94, y: 24 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: .45, ease: [0.22, 1, 0.36, 1] }} className={`player-card rarity-${player.rarity.toLowerCase()}`}><div className="card-top"><span>{player.rarity}</span><b>{player.position}</b></div><div className="rating">{player.overall}</div><FootballerPhoto player={player} /><h2>{player.name}</h2><p>{player.country} · Real footballer</p><div className="stats"><Stat value={player.pace} label="PAC" /><Stat value={player.shooting} label="SHO" /><Stat value={player.passing} label="PAS" /><Stat value={player.dribbling} label="DRI" /><Stat value={player.defending} label="DEF" /><Stat value={player.physical} label="PHY" /></div><div className="trait">✦ {player.trait}</div></motion.div>; }
+function PlayerCard({ player }: { player: Footballer }) { const roles = getFootballerRoles(player); return <motion.div key={player.id} initial={{ opacity: 0, scale: .94, y: 24 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: .45, ease: [0.22, 1, 0.36, 1] }} className={`player-card rarity-${player.rarity.toLowerCase()}`}><div className="card-top"><span>{player.rarity}</span><b>{roles[0] ?? player.position}</b></div><div className="rating">{player.overall}</div><FootballerPhoto player={player} /><h2>{player.name}</h2><p>{player.country} · Real footballer</p><div className="player-roles" aria-label="Playable positions">{roles.map((role, index) => <span className={index === 0 ? "primary" : ""} key={role}>{role}</span>)}</div><div className="stats"><Stat value={player.pace} label="PAC" /><Stat value={player.shooting} label="SHO" /><Stat value={player.passing} label="PAS" /><Stat value={player.dribbling} label="DRI" /><Stat value={player.defending} label="DEF" /><Stat value={player.physical} label="PHY" /></div><div className="trait">✦ {player.trait}</div></motion.div>; }
 function Stat({ value, label }: { value: number; label: string }) { return <div><b>{value}</b><span>{label}</span></div>; }
 
 function squadPositionCounts(squad: SquadEntry[]): PoolTargets {
@@ -517,11 +519,20 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
   const minimum = state.currentBid === 0 ? state.settings.minimumBid : state.currentBid + state.settings.bidIncrement;
   const maximumSquadSize = getMaximumSquadSize(state.settings.squadSize);
   const hasPassed = (state.passedManagerIds ?? []).includes(managerId);
-  const cannotBid = sending || hasPassed || seconds <= 0 || me.squad.length >= maximumSquadSize || me.budget < minimum;
+  const canComplete = me.squad.length >= state.settings.squadSize && !me.auctionComplete;
+  const cannotBid = sending || me.auctionComplete || hasPassed || seconds <= 0 || me.squad.length >= maximumSquadSize || me.budget < minimum;
   const passOnPlayer = () => {
     if (hasPassed || seconds <= 0) return;
     setSending(true);
     socket.emit("auction:pass", { code: state.code, roundId: state.roundId }, response => {
+      setSending(false);
+      if (!response.ok) setError(response.error);
+    });
+  };
+  const completeSquad = () => {
+    if (!canComplete || sending) return;
+    setSending(true);
+    socket.emit("auction:complete", { code: state.code }, response => {
       setSending(false);
       if (!response.ok) setError(response.error);
     });
@@ -538,10 +549,10 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
   const quitSolo = () => leave();
   if (state.phase === "round_result") return <RoundResult state={state} />;
   return <main className="arena page"><div className="arena-top"><div><span>ROOM {state.code}</span><b>ROUND {state.roundIndex + 1}/{state.totalRounds}</b></div><div className="arena-controls"><div className="live"><i /> LIVE AUCTION</div><div className="secure-badge" title="Budgets and bids are validated by the server">🔒 SERVER SECURE</div><button aria-label="Send fire reaction" onClick={() => socket.emit("room:reaction", { code: state.code, reaction: "🔥" })}>🔥</button>{state.isSolo && <button className="quit-match" onClick={quitSolo}>QUIT MATCH</button>}</div></div>
-    <div className="arena-grid"><div className="arena-left-stack"><SquadTracker squad={me.squad} currentPosition={state.currentFootballer?.position} squadSize={state.settings.squadSize} /><aside className="panel manager-board"><h3>ROOM SQUADS</h3>{state.managers.map(manager => <div className={`manager-line ${manager.id === state.highestBidderId ? "leading" : ""} ${manager.id === managerId ? "you" : ""}`} key={manager.id}><span className="mini-avatar">{manager.avatar}</span><div><b>{manager.name}</b><small>{manager.squad.length}/{getMaximumSquadSize(state.settings.squadSize)} · {Math.max(0, getMaximumSquadSize(state.settings.squadSize) - manager.squad.length)} spots left</small></div><strong>{money(manager.budget)}</strong></div>)}</aside></div>
+    <div className="arena-grid"><div className="arena-left-stack"><SquadTracker squad={me.squad} currentPosition={state.currentFootballer?.position} squadSize={state.settings.squadSize} /><aside className="panel manager-board"><h3>ROOM SQUADS</h3>{state.managers.map(manager => <div className={`manager-line ${manager.id === state.highestBidderId ? "leading" : ""} ${manager.id === managerId ? "you" : ""}`} key={manager.id}><span className="mini-avatar">{manager.avatar}</span><div><b>{manager.name}</b><small>{manager.auctionComplete ? "SQUAD COMPLETE" : `${manager.squad.length}/${getMaximumSquadSize(state.settings.squadSize)} · ${Math.max(0, getMaximumSquadSize(state.settings.squadSize) - manager.squad.length)} spots left`}</small></div><strong>{money(manager.budget)}</strong></div>)}</aside></div>
       <section className="auction-stage">{state.currentFootballer && <PlayerCard player={state.currentFootballer} />}<div className="auction-meta"><div className="timer" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><div><strong>{Math.ceil(seconds)}</strong><span>SEC</span></div></div><div className="current-price"><span>CURRENT BID</span><strong>{money(state.currentBid || state.settings.minimumBid)}</strong><p>{state.highestBidderId ? `${state.managers.find(manager => manager.id === state.highestBidderId)?.name} leads` : "Opening bid"}</p></div></div></section>
       <aside className="panel bid-feed"><h3>BID FEED</h3>{state.bidHistory.length === 0 ? <div className="empty-feed">No bids yet.<br />Make the first move.</div> : state.bidHistory.map((bid, index) => <div className={`feed-row ${index === 0 ? "latest" : ""}`} key={bid.id}><span>{bid.managerName}</span><b>{money(bid.amount)}</b></div>)}</aside></div>
-    <div className="bid-dock"><div className="budget-read"><span>YOUR BUDGET</span><b>{money(me.budget)}</b><small>{me.squad.length}/{maximumSquadSize} signed · {Math.max(0, maximumSquadSize - me.squad.length)} open</small></div><div className="quick-bids"><button disabled={cannotBid} onClick={() => actualBid(minimum)}>BID {money(minimum)}</button><button disabled={cannotBid || me.budget < minimum + 5} onClick={() => actualBid(minimum + 5)}>+5M</button><button disabled={cannotBid || me.budget < minimum + 10} onClick={() => actualBid(minimum + 10)}>+10M</button><button type="button" className={`pass-player ${hasPassed ? "passed" : ""}`} disabled={sending || hasPassed || seconds <= 0 || me.squad.length >= maximumSquadSize || me.budget < state.settings.minimumBid} onClick={passOnPlayer}>{hasPassed ? "PASSED" : "PASS PLAYER"}</button></div><form className="custom-bid" onSubmit={event => { event.preventDefault(); if (custom) actualBid(+custom); }}><input inputMode="numeric" enterKeyHint="send" aria-label="Custom bid amount" value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ""))} placeholder="CUSTOM BID" /><button type="submit" disabled={cannotBid || !custom || +custom > me.budget}>PLACE</button></form></div></main>;
+    <div className="bid-dock"><div className="budget-read"><span>YOUR BUDGET</span><b>{money(me.budget)}</b><small>{me.squad.length}/{maximumSquadSize} signed · {Math.max(0, maximumSquadSize - me.squad.length)} open</small></div><div className="quick-bids"><button disabled={cannotBid} onClick={() => actualBid(minimum)}>BID {money(minimum)}</button><button disabled={cannotBid || me.budget < minimum + 5} onClick={() => actualBid(minimum + 5)}>+5M</button><button disabled={cannotBid || me.budget < minimum + 10} onClick={() => actualBid(minimum + 10)}>+10M</button><button type="button" className={`pass-player ${hasPassed ? "passed" : ""}`} disabled={sending || me.auctionComplete || hasPassed || seconds <= 0 || me.squad.length >= maximumSquadSize || me.budget < state.settings.minimumBid} onClick={passOnPlayer}>{hasPassed ? "PASSED" : "PASS PLAYER"}</button><button type="button" className={`complete-auction ${me.auctionComplete ? "done" : ""}`} disabled={sending || !canComplete} onClick={completeSquad}>{me.auctionComplete ? "SQUAD COMPLETE ✓" : `I'M DONE (${me.squad.length}/${state.settings.squadSize})`}</button></div><form className="custom-bid" onSubmit={event => { event.preventDefault(); if (custom) actualBid(+custom); }}><input inputMode="numeric" enterKeyHint="send" aria-label="Custom bid amount" value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ""))} placeholder="CUSTOM BID" /><button type="submit" disabled={cannotBid || !custom || +custom > me.budget}>PLACE</button></form></div></main>;
 }
 
 function RoundResult({ state }: { state: RoomState }) {
@@ -583,7 +594,7 @@ function autoArrange(squad: SquadEntry[], formation: FormationDefinition): Recor
 function FormationRoom({ socket, state, managerId, setError, leave }: { socket: GameSocket; state: RoomState; managerId: string; setError: (value: string) => void; leave: () => void }) {
   const me = state.managers.find(manager => manager.id === managerId)!;
   const starterTarget = Math.min(11, state.settings.squadSize);
-  const substituteTarget = Math.max(0, state.settings.squadSize - starterTarget);
+  const substituteTarget = Math.max(0, me.squad.length - starterTarget);
   const validFormations = useMemo(() => FORMATIONS.filter(item => item.slots.length === starterTarget), [starterTarget]);
   const savedFormation = me.formationId ? FORMATION_BY_ID.get(me.formationId) : undefined;
   const initialFormation = savedFormation?.slots.length === starterTarget ? savedFormation.id : validFormations[0]!.id;
@@ -591,6 +602,7 @@ function FormationRoom({ socket, state, managerId, setError, leave }: { socket: 
   const [picks, setPicks] = useState<Record<string, string>>(() => me.lineup.length ? Object.fromEntries(me.lineup.map(item => [item.slotId, item.footballerId])) : autoArrange(me.squad, FORMATION_BY_ID.get(initialFormation)!));
   const [selectedPlayer, setSelectedPlayer] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [draggingPlayer, setDraggingPlayer] = useState<string | null>(null);
   const seconds = useCountdown(state.formationEndsAt);
   const formation = FORMATION_BY_ID.get(formationId) ?? validFormations[0]!;
   const playerMap = useMemo(() => new Map(me.squad.map(entry => [entry.footballer.id, entry.footballer])), [me.squad]);
@@ -638,6 +650,36 @@ function FormationRoom({ socket, state, managerId, setError, leave }: { socket: 
     });
     setSelectedPlayer(null);
   };
+  const movePlayerToSlot = (footballerId: string, targetSlotId: string) => {
+    if (!canUseInSlot(footballerId, targetSlotId)) { setError("That player cannot be used in this slot."); return; }
+    setPicks(current => {
+      const next = { ...current };
+      const sourceSlot = Object.entries(next).find(([, id]) => id === footballerId)?.[0];
+      const targetPlayer = next[targetSlotId];
+      if (sourceSlot) {
+        if (targetPlayer && !canUseInSlot(targetPlayer, sourceSlot)) { setError("The swapped player cannot play in the vacated slot."); return current; }
+        next[targetSlotId] = footballerId;
+        if (targetPlayer) next[sourceSlot] = targetPlayer; else delete next[sourceSlot];
+      } else {
+        next[targetSlotId] = footballerId;
+      }
+      return next;
+    });
+    setDraggingPlayer(null);
+    setSelectedPlayer(null);
+  };
+  const dragProps = (footballerId: string) => ({
+    draggable: true,
+    onDragStartCapture: (event: React.DragEvent<HTMLElement>) => { event.dataTransfer.setData("text/plain", footballerId); setDraggingPlayer(footballerId); },
+    onDragEnd: () => setDraggingPlayer(null),
+    onPointerDown: () => { window.setTimeout(() => setDraggingPlayer(footballerId), 280); },
+    onPointerUp: (event: React.PointerEvent<HTMLElement>) => {
+      if (!draggingPlayer) return;
+      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-slot-id]");
+      if (target?.dataset.slotId) movePlayerToSlot(draggingPlayer, target.dataset.slotId);
+      setDraggingPlayer(null);
+    }
+  });
   const submit = () => {
     const lineupPicks = formation.slots.map(item => ({ slotId: item.id, footballerId: picks[item.id] ?? "" }));
     if (lineupPicks.some(item => !item.footballerId)) { setError("Every formation slot needs a starting player."); return; }
@@ -656,9 +698,9 @@ function FormationRoom({ socket, state, managerId, setError, leave }: { socket: 
       <section className="lineup-center"><div className="lineup-toolbar"><div><span>SELECTED SYSTEM</span><strong>{formation.name}</strong><em>{formation.style}</em></div><button onClick={() => setPicks(autoArrange(me.squad, formation))}>AUTO ARRANGE</button></div><div className="tactical-pitch">{formation.slots.map(formationSlot => {
         const player = playerMap.get(picks[formationSlot.id] ?? "");
         const selected = player && selectedPlayer === player.id;
-        return <button type="button" onClick={() => player && swapPlayer(player.id, formationSlot.id)} className={`pitch-player ${selected ? "selected" : ""}`} style={{ left: `${formationSlot.x}%`, top: `${formationSlot.y}%` }} key={formationSlot.id}><span className="role-badge">{formationSlot.role}</span>{player ? <motion.div className="pitch-player-content" key={player.id} initial={{ opacity: 0, scale: .82, y: 8 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: .22, ease: [0.22, 1, 0.36, 1] }}><FootballerPhoto key={player.id} player={player} compact /><strong>{player.name.split(" ").at(-1)}</strong><small><b>{player.position}</b> · {player.overall} OVR</small></motion.div> : <b>+</b>}</button>;
-      })}</div><div className="assembly-note">Click one footballer, then another starter or substitute to swap them.</div></section>
-      <aside className="panel bench-panel"><div className="panel-title"><h2>{substituteTarget ? "Substitutes" : "Squad"}</h2><span>{substitutes.length}/{substituteTarget}</span></div><div className="bench-list">{substitutes.length ? substitutes.map(entry => <button className={selectedPlayer === entry.footballer.id ? "selected" : ""} onClick={() => swapPlayer(entry.footballer.id)} key={entry.footballer.id}><FootballerPhoto key={entry.footballer.id} player={entry.footballer} compact /><div><strong>{entry.footballer.name}</strong><span>{entry.footballer.position} · {entry.footballer.overall} OVR</span></div></button>) : <div className="no-subs">All purchased footballers start in this format.</div>}</div><div className="lineup-summary"><span>Starters</span><b>{Object.values(picks).length}/{starterTarget}</b><span>Substitutes</span><b>{substitutes.length}/{substituteTarget}</b></div><button className="primary submit-lineup" disabled={submitting || Object.values(picks).length !== starterTarget || substitutes.length !== substituteTarget} onClick={submit}>{submitting ? "LOCKING…" : "READY · LOCK LINEUP"}</button>{state.isSolo && <button className="danger-outline" onClick={quitSolo}>Quit Solo Match</button>}</aside></div>
+        const fit = player ? getRoleFitLabel(player, formationSlot.role) : null; return <button type="button" data-slot-id={formationSlot.id} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const id = event.dataTransfer.getData("text/plain"); if (id) movePlayerToSlot(id, formationSlot.id); }} onClick={() => player && swapPlayer(player.id, formationSlot.id)} className={`pitch-player ${selected ? "selected" : ""} ${draggingPlayer ? "drag-target" : ""}`} style={{ left: `${formationSlot.x}%`, top: `${formationSlot.y}%` }} key={formationSlot.id}><span className="role-badge">{formationSlot.role}</span>{player ? <motion.div {...dragProps(player.id)} className="pitch-player-content" key={player.id} initial={{ opacity: 0, scale: .82, y: 8 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: .22, ease: [0.22, 1, 0.36, 1] }}><FootballerPhoto key={player.id} player={player} compact /><strong>{player.name.split(" ").at(-1)}</strong><small><b>{getFootballerRoles(player).join("/")}</b> · {player.overall} OVR</small><em className={`fit-${fit?.toLowerCase().replaceAll(" ", "-")}`}>{fit}</em></motion.div> : <b>+</b>}</button>;
+      })}</div><div className="assembly-note">Tap two cards to swap, or hold and drag a card onto another position. Out-of-position players reduce team OVR.</div></section>
+      <aside className="panel bench-panel"><div className="panel-title"><h2>{substituteTarget ? "Substitutes" : "Squad"}</h2><span>{substitutes.length}/{substituteTarget}</span></div><div className="bench-list">{substitutes.length ? substitutes.map(entry => <button {...dragProps(entry.footballer.id)} className={selectedPlayer === entry.footballer.id ? "selected" : ""} onClick={() => swapPlayer(entry.footballer.id)} key={entry.footballer.id}><FootballerPhoto key={entry.footballer.id} player={entry.footballer} compact /><div><strong>{entry.footballer.name}</strong><span>{getFootballerRoles(entry.footballer).join("/")} · {entry.footballer.overall} OVR</span></div></button>) : <div className="no-subs">All purchased footballers start in this format.</div>}</div><div className="lineup-summary"><span>Starters</span><b>{Object.values(picks).length}/{starterTarget}</b><span>Substitutes</span><b>{substitutes.length}/{substituteTarget}</b></div><button className="primary submit-lineup" disabled={submitting || Object.values(picks).length !== starterTarget || substitutes.length !== substituteTarget} onClick={submit}>{submitting ? "LOCKING…" : "READY · LOCK LINEUP"}</button>{state.isSolo && <button className="danger-outline" onClick={quitSolo}>Quit Solo Match</button>}</aside></div>
   </main>;
 }
 

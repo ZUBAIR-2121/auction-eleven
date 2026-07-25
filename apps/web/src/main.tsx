@@ -55,6 +55,21 @@ const createSession = () => {
   return id;
 };
 const sessionId = createSession();
+
+function releaseDocumentScrollLock() {
+  const html = document.documentElement;
+  const body = document.body;
+  body.classList.remove("formation-dragging");
+  html.style.removeProperty("overflow");
+  html.style.removeProperty("height");
+  body.style.removeProperty("overflow");
+  body.style.removeProperty("height");
+  body.style.removeProperty("position");
+  body.style.removeProperty("top");
+  body.style.removeProperty("width");
+  body.style.removeProperty("touch-action");
+}
+
 const money = (value: number) => `${value}M`;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const POSITIONS: Position[] = ["GK", "DEF", "MID", "FWD"];
@@ -189,15 +204,7 @@ function App() {
       document.documentElement.style.setProperty("--ae-vh", `${window.innerHeight * 0.01}px`);
     };
     const unlockDocumentScroll = () => {
-      const html = document.documentElement;
-      const body = document.body;
-      html.style.removeProperty("overflow");
-      html.style.removeProperty("height");
-      body.style.removeProperty("overflow");
-      body.style.removeProperty("height");
-      body.style.removeProperty("position");
-      body.style.removeProperty("top");
-      body.style.removeProperty("width");
+      releaseDocumentScrollLock();
       updateViewportHeight();
     };
     unlockDocumentScroll();
@@ -244,6 +251,21 @@ function App() {
     localStorage.setItem("ae_manager", id);
     setManagerId(id);
   };
+  useEffect(() => {
+    const phase = state?.phase;
+    if (phase !== "formation") releaseDocumentScrollLock();
+
+    if (phase === "finished") {
+      const frame = window.requestAnimationFrame(() => {
+        releaseDocumentScrollLock();
+        window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+        document.querySelector<HTMLElement>("[data-results-scroll]")?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }
+    return undefined;
+  }, [state?.phase]);
+
   const leave = () => {
     if (state && state.phase !== "lobby" && state.phase !== "finished") {
       const message = state.isSolo
@@ -770,13 +792,30 @@ function FormationRoom({ socket, state, managerId, setError, leave }: { socket: 
       setDragPoint(null);
       document.body.classList.remove("formation-dragging");
     };
+    const cancelActiveDrag = () => {
+      const drag = pointerDrag.current;
+      if (drag?.timer !== null && drag?.timer !== undefined) window.clearTimeout(drag.timer);
+      pointerDrag.current = null;
+      setDraggingPlayer(null);
+      setDragPoint(null);
+      releaseDocumentScrollLock();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") cancelActiveDrag();
+    };
+
     window.addEventListener("pointermove", onMove, { passive: false });
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("blur", cancelActiveDrag);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("blur", cancelActiveDrag);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      cancelActiveDrag();
     };
   }, [formationId, picks]);
 
@@ -926,10 +965,24 @@ function RoomChat({ socket, state, managerId, setError }: { socket: GameSocket; 
 }
 
 function Results({ state, managerId, leave }: { state: RoomState; managerId: string; leave: () => void }) {
+  useEffect(() => {
+    releaseDocumentScrollLock();
+    const page = document.querySelector<HTMLElement>("[data-results-scroll]");
+    const frame = window.requestAnimationFrame(() => {
+      page?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      page?.focus({ preventScroll: true });
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      releaseDocumentScrollLock();
+    };
+  }, []);
+
   const winner = state.rankings[0];
   const podium = state.rankings.slice(0, 3);
   const podiumOrder = [podium[1], podium[0], podium[2]].filter((item): item is NonNullable<typeof item> => !!item);
-  return <main className="results page"><section className="winner-hero"><div className="trophy">🏆</div><div><div className="eyebrow">FORMATION ANALYSIS COMPLETE</div><h1>{winner?.managerName} wins!</h1><p>{winner?.formationName} · Final team score <strong>{winner?.score}</strong></p></div></section>
+  return <main className="results page results-scroll-page" data-results-scroll tabIndex={-1}><section className="winner-hero"><div className="trophy">🏆</div><div><div className="eyebrow">FORMATION ANALYSIS COMPLETE</div><h1>{winner?.managerName} wins!</h1><p>{winner?.formationName} · Final team score <strong>{winner?.score}</strong></p></div></section>
     <section className="podium-section"><div className="podium-stage">{podiumOrder.map(result => <div className={`podium-place rank-${result.rank}`} key={result.managerId}><div className="podium-medal">{result.rank === 1 ? "👑" : result.rank === 2 ? "🥈" : "🥉"}</div><span>#{result.rank}</span><h2>{result.managerName}</h2><strong>{result.score}</strong><small>{result.formationName}</small><div><b>FIT {result.lineupFit}</b><b>XI {result.startingXIQuality}</b><b>DEPTH {result.benchStrength}</b></div></div>)}</div></section>
     <div className="results-grid"><section className="panel leaderboard"><div className="panel-title"><h2>Final leaderboard</h2><span>SERVER RANKED</span></div>{state.rankings.map(result => <div className={`rank-row ${result.managerId === managerId ? "you" : ""}`} key={result.managerId}><strong>#{result.rank}</strong><div><b>{result.managerName}</b><small>{result.formationName} · Fit {result.lineupFit} · Depth {result.benchStrength}</small></div><span>{result.score}</span></div>)}</section><section className="panel awards"><div className="panel-title"><h2>Awards</h2><span>MATCH HIGHLIGHTS</span></div>{state.awards.map(award => <div className="award" key={award.title}><div>✦</div><p><span>{award.title}</span><b>{award.managerName}</b><small>{award.detail}</small></p></div>)}</section></div>
     <section className="squads"><h2>Final squads · {state.settings.squadSize} starters + substitutes</h2><div className="squad-grid">{state.managers.map(manager => {

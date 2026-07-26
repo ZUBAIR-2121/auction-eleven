@@ -2,10 +2,14 @@ export type Position = "GK" | "DEF" | "MID" | "FWD";
 export type GamePhase = "lobby" | "auction" | "round_result" | "formation" | "finished";
 export type PoolTargets = Record<Position, number>;
 export type ManagerLimit = 2 | 3 | 4 | 5 | 6 | 7 | 8;
-export type SquadSize = 6 | 7 | 8 | 9 | 10 | 11;
+export type SquadSize = 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
 export type BotDifficulty = "Amateur" | "Professional" | "World Class" | "Legendary";
+export type PricingMode = "normal" | "ovr_scaled";
 export const MAX_SUBSTITUTES = 10;
-export const getMaximumSquadSize = (starterCount: number): number => starterCount + MAX_SUBSTITUTES;
+/** The number of players placed on the pitch for the selected squad target. */
+export const getStartingLineupSize = (squadSize: number): number => Math.min(11, Math.max(6, Math.round(squadSize)));
+/** Maximum players a manager may sign, including up to ten substitutes. */
+export const getMaximumSquadSize = (squadSize: number): number => getStartingLineupSize(squadSize) + MAX_SUBSTITUTES;
 export const SQUAD_POSITION_TARGETS: PoolTargets = { GK: 2, DEF: 6, MID: 5, FWD: 4 };
 export function getSquadPositionTargets(size: number): PoolTargets {
   const targets: Record<number, PoolTargets> = {
@@ -193,6 +197,7 @@ export interface GameSettings {
   startingBudget: number;
   minimumBid: number;
   bidIncrement: number;
+  pricingMode: PricingMode;
   auctionSeconds: number;
   squadSize: SquadSize;
   antiSnipeSeconds: number;
@@ -200,6 +205,30 @@ export interface GameSettings {
   botDifficulty: BotDifficulty;
   managerLimit: ManagerLimit;
   poolTargets: PoolTargets;
+}
+
+/**
+ * Returns the first valid bid for a footballer.
+ *
+ * - normal: every card opens at the room minimum bid.
+ * - ovr_scaled: better cards open higher, while prices scale with the room
+ *   budget so low- and high-budget rooms keep a playable economy.
+ *
+ * The result is always aligned to the configured bid increment.
+ */
+export function getOpeningBid(
+  settings: Pick<GameSettings, "startingBudget" | "minimumBid" | "bidIncrement" | "pricingMode">,
+  footballer?: Pick<Footballer, "overall" | "basePrice"> | null
+): number {
+  const minimumBid = Math.max(1, Math.round(settings.minimumBid));
+  const increment = Math.max(1, Math.round(settings.bidIncrement));
+  if (settings.pricingMode !== "ovr_scaled" || !footballer) return minimumBid;
+
+  const budgetScale = Math.max(.3, Math.min(3, settings.startingBudget / 1000));
+  const eliteCurve = .68 + Math.max(0, footballer.overall - 85) * .025;
+  const rawOpening = Math.max(minimumBid, Math.round(footballer.basePrice * eliteCurve * budgetScale));
+  const steps = Math.max(0, Math.ceil((rawOpening - minimumBid) / increment));
+  return minimumBid + steps * increment;
 }
 
 export interface Award {

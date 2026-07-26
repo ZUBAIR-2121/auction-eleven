@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { getMaximumSquadSize, getSquadPositionTargets } from "@auction-eleven/shared";
+import { getMaximumSquadSize, getOpeningBid, getSquadPositionTargets, getStartingLineupSize } from "@auction-eleven/shared";
 import type {
   Award,
   BidEntry,
@@ -52,8 +52,9 @@ const settingsSchema = z.object({
   startingBudget: z.number().int().min(300).max(3000).optional(),
   minimumBid: z.number().int().min(1).max(50).optional(),
   bidIncrement: z.number().int().min(1).max(20).optional(),
+  pricingMode: z.enum(["normal", "ovr_scaled"]).optional(),
   auctionSeconds: z.number().int().min(10).max(30).optional(),
-  squadSize: z.union([z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11)]).optional(),
+  squadSize: z.union([z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11), z.literal(12), z.literal(13), z.literal(14), z.literal(15), z.literal(16), z.literal(17)]).optional(),
   antiSnipeSeconds: z.number().int().min(0).max(8).optional(),
   formationSeconds: z.number().int().min(120).max(600).optional(),
   botDifficulty: z.enum(["Amateur", "Professional", "World Class", "Legendary"]).optional(),
@@ -462,6 +463,8 @@ export class RoomManager {
   private scheduleBots(room: InternalRoom): void {
     room.botTimers.forEach(clearTimeout);
     room.botTimers = [];
+    const footballer = room.currentFootballer!;
+    const openingBid = getOpeningBid(room.settings, footballer);
     const profiles = {
       Amateur: { value: .72, variance: .24, attempts: [1, 2], reaction: 3400, need: .10 },
       Professional: { value: .92, variance: .28, attempts: [2, 4], reaction: 2300, need: .22 },
@@ -469,8 +472,7 @@ export class RoomManager {
       Legendary: { value: 1.24, variance: .16, attempts: [4, 7], reaction: 850, need: .52 }
     } as const;
     const profile = profiles[room.settings.botDifficulty];
-    room.managers.filter(manager => manager.isBot && manager.squad.length < getMaximumSquadSize(room.settings.squadSize) && manager.budget >= room.settings.minimumBid).forEach((bot, index) => {
-      const footballer = room.currentFootballer!;
+    room.managers.filter(manager => manager.isBot && manager.squad.length < getMaximumSquadSize(room.settings.squadSize) && manager.budget >= openingBid).forEach((bot, index) => {
       const reserve = Math.max(0, room.settings.squadSize - bot.squad.length - 1) * room.settings.minimumBid;
       const targets = getSquadPositionTargets(room.settings.squadSize);
       const ownedAtPosition = bot.squad.filter(entry => entry.footballer.position === footballer.position).length;
@@ -497,7 +499,7 @@ export class RoomManager {
           : profile.reaction + Math.floor(Math.random() * Math.max(1200, roundWindow - profile.reaction));
         const timer = setTimeout(() => {
           if (room.phase !== "auction" || room.currentFootballer?.id !== footballer.id || room.highestBidderId === bot.id) return;
-          const next = room.currentBid === 0 ? room.settings.minimumBid : room.currentBid + room.settings.bidIncrement;
+          const next = room.currentBid === 0 ? openingBid : room.currentBid + room.settings.bidIncrement;
           if (next <= max) {
             try { this.bid(room.code, bot.id, next, this.id("botbid"), room.roundId); } catch { /* another bid won the race */ }
           }
@@ -554,10 +556,11 @@ export class RoomManager {
     this.broadcast(room);
 
     const maximumSquadSize = getMaximumSquadSize(room.settings.squadSize);
+    const openingBid = getOpeningBid(room.settings, room.currentFootballer);
     const eligible = room.managers.filter(item =>
       !item.auctionComplete &&
       item.squad.length < maximumSquadSize &&
-      item.budget >= room.settings.minimumBid &&
+      item.budget >= openingBid &&
       !!room.currentFootballer &&
       !this.managerOwns(item, room.currentFootballer)
     );
@@ -574,6 +577,11 @@ export class RoomManager {
     if (room.phase !== "auction" && room.phase !== "round_result") throw new Error("You can only complete your squad during the auction.");
     const manager = this.managerIn(room, managerId);
     if (manager.squad.length < room.settings.squadSize) throw new Error(`Sign at least ${room.settings.squadSize} players before completing your squad.`);
+    const starterCount = getStartingLineupSize(room.settings.squadSize);
+    const goalkeeperCount = manager.squad.filter(entry => entry.footballer.position === "GK").length;
+    const outfieldCount = manager.squad.length - goalkeeperCount;
+    if (goalkeeperCount < 1) throw new Error("Sign at least one goalkeeper before completing your squad.");
+    if (outfieldCount < starterCount - 1) throw new Error(`Sign at least ${starterCount - 1} outfield players for your ${starterCount}-player formation.`);
     manager.auctionComplete = true;
     if (!room.passedManagerIds.includes(manager.id)) room.passedManagerIds = [...room.passedManagerIds, manager.id];
     this.broadcast(room);
@@ -582,7 +590,8 @@ export class RoomManager {
       return;
     }
     if (room.phase === "auction") {
-      const activeChallengers = room.managers.filter(item => !item.auctionComplete && item.id !== room.highestBidderId && item.squad.length < getMaximumSquadSize(room.settings.squadSize) && item.budget >= room.settings.minimumBid);
+      const openingBid = getOpeningBid(room.settings, room.currentFootballer);
+      const activeChallengers = room.managers.filter(item => !item.auctionComplete && item.id !== room.highestBidderId && item.squad.length < getMaximumSquadSize(room.settings.squadSize) && item.budget >= openingBid);
       if (room.highestBidderId && activeChallengers.every(item => room.passedManagerIds.includes(item.id))) this.endRound(room.code, room.roundId);
     }
   }
@@ -600,17 +609,18 @@ export class RoomManager {
       winner.squad.push({ footballer, price: room.currentBid, round: room.roundIndex + 1 });
       room.lastWinner = { managerName: winner.name, footballerName: footballer.name, amount: room.currentBid };
     } else if (footballer) {
+      const openingBid = getOpeningBid(room.settings, footballer);
       const attempts = (room.unsoldCounts.get(footballer.id) ?? 0) + 1;
       room.unsoldCounts.set(footballer.id, attempts);
       if (attempts >= 2) {
         const eligible = room.managers
-          .filter(manager => !manager.auctionComplete && manager.squad.length < getMaximumSquadSize(room.settings.squadSize) && manager.budget >= room.settings.minimumBid && !!footballer && !this.managerOwns(manager, footballer) && !room.passedManagerIds.includes(manager.id))
+          .filter(manager => !manager.auctionComplete && manager.squad.length < getMaximumSquadSize(room.settings.squadSize) && manager.budget >= openingBid && !!footballer && !this.managerOwns(manager, footballer) && !room.passedManagerIds.includes(manager.id))
           .sort((a, b) => a.squad.length - b.squad.length || b.budget - a.budget || a.joinedAt - b.joinedAt);
         const recipient = eligible[0];
         if (recipient) {
-          recipient.budget -= room.settings.minimumBid;
-          recipient.squad.push({ footballer, price: room.settings.minimumBid, round: room.roundIndex + 1 });
-          room.lastWinner = { managerName: recipient.name, footballerName: footballer.name, amount: room.settings.minimumBid, automatic: true };
+          recipient.budget -= openingBid;
+          recipient.squad.push({ footballer, price: openingBid, round: room.roundIndex + 1 });
+          room.lastWinner = { managerName: recipient.name, footballerName: footballer.name, amount: openingBid, automatic: true };
         } else {
           room.lastWinner = null;
         }
@@ -641,7 +651,7 @@ export class RoomManager {
     room.formationEndsAt = Date.now() + room.settings.formationSeconds * 1000;
 
     for (const manager of room.managers) {
-      const automatic = buildAutomaticLineup(manager.squad, undefined, room.settings.squadSize);
+      const automatic = buildAutomaticLineup(manager.squad, undefined, getStartingLineupSize(room.settings.squadSize));
       manager.formationId = automatic.formationId;
       manager.lineup = automatic.lineup;
       manager.lineupScore = automatic.score;
@@ -667,7 +677,7 @@ export class RoomManager {
     const manager = this.managerIn(room, managerId);
     if (manager.isBot) throw new Error("AI lineups are controlled by the server.");
     const picks = lineupSchema.parse(picksInput);
-    const lineup = validateAndBuildLineup(manager.squad, formationId, picks, room.settings.squadSize);
+    const lineup = validateAndBuildLineup(manager.squad, formationId, picks, getStartingLineupSize(room.settings.squadSize));
     manager.formationId = formationId;
     manager.lineup = lineup;
     manager.lineupScore = Math.round(lineup.reduce((sum, item) => sum + item.fit, 0) / lineup.length);
@@ -693,7 +703,7 @@ export class RoomManager {
     const bargain = [...allPurchases].sort((a, b) => getPurchaseValue(b.entry) - getPurchaseValue(a.entry))[0];
     if (bestFit) awards.push({ title: "Best Formation Fit", managerName: bestFit.managerName, detail: `${bestFit.formationName} • Fit ${bestFit.lineupFit}` });
     if (bestAttack) awards.push({ title: "Best Attack", managerName: bestAttack.managerName, detail: `Attack rating ${bestAttack.attack}` });
-    if (bestBench && room.managers.some(manager => manager.squad.length > room.settings.squadSize)) awards.push({ title: "Strongest Bench", managerName: bestBench.managerName, detail: `Bench strength ${bestBench.benchStrength}` });
+    if (bestBench && room.managers.some(manager => manager.squad.length > getStartingLineupSize(room.settings.squadSize))) awards.push({ title: "Strongest Bench", managerName: bestBench.managerName, detail: `Bench strength ${bestBench.benchStrength}` });
     if (bestValue) awards.push({ title: "Best Value", managerName: bestValue.managerName, detail: `Value rating ${bestValue.value}` });
     if (expensive) awards.push({ title: "Record Signing", managerName: expensive.manager.name, detail: `${expensive.entry.footballer.name} for ${expensive.entry.price}M` });
     if (bargain) awards.push({ title: "Biggest Bargain", managerName: bargain.manager.name, detail: `${bargain.entry.footballer.name} for ${bargain.entry.price}M` });

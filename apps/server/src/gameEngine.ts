@@ -2,7 +2,9 @@ import {
   FORMATION_BY_ID,
   FORMATIONS,
   getFootballerRoles,
+  getOpeningBid,
   getMaximumSquadSize,
+  getStartingLineupSize,
   type Footballer,
   type FormationDefinition,
   type GameSettings,
@@ -19,6 +21,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   startingBudget: 1000,
   minimumBid: 1,
   bidIncrement: 1,
+  pricingMode: "normal",
   auctionSeconds: 12,
   squadSize: 11,
   antiSnipeSeconds: 5,
@@ -42,19 +45,20 @@ export function validateBid(args: {
   const { amount, currentBid, manager, settings, auctionActive, footballer } = args;
   if (!auctionActive) return "This auction round is closed.";
   if (!Number.isInteger(amount)) return "Bids must use whole millions.";
-  const minimum = currentBid === 0 ? settings.minimumBid : currentBid + settings.bidIncrement;
+  const openingBid = getOpeningBid(settings, footballer);
+  const minimum = currentBid === 0 ? openingBid : currentBid + settings.bidIncrement;
   if (amount < minimum) return `Minimum valid bid is ${minimum}M.`;
   if ((amount - settings.minimumBid) % settings.bidIncrement !== 0) return `Bid must follow the ${settings.bidIncrement}M increment.`;
   if (amount > manager.budget) return "You do not have enough budget.";
   const maximumSquadSize = getMaximumSquadSize(settings.squadSize);
-  if (manager.squad.length >= maximumSquadSize) return `Your squad is full (${settings.squadSize} starters + 10 substitutes).`;
+  if (manager.squad.length >= maximumSquadSize) return `Your squad is full (${getStartingLineupSize(settings.squadSize)} starters + 10 substitutes).`;
   const catalogueId = footballer?.catalogId ?? footballer?.id;
   if (catalogueId && manager.squad.some(entry => (entry.footballer.catalogId ?? entry.footballer.id) === catalogueId)) {
     return `You already own ${footballer?.name ?? "this footballer"}.`;
   }
-  const startersStillNeededAfterWin = Math.max(0, settings.squadSize - manager.squad.length - 1);
-  const reserve = startersStillNeededAfterWin * settings.minimumBid;
-  if (manager.budget - amount < reserve) return `Keep at least ${reserve}M to complete your ${settings.squadSize}-player starting squad.`;
+  const playersStillNeededAfterWin = Math.max(0, settings.squadSize - manager.squad.length - 1);
+  const reserve = playersStillNeededAfterWin * settings.minimumBid;
+  if (manager.budget - amount < reserve) return `Keep at least ${reserve}M to complete your ${settings.squadSize}-player squad target.`;
   return null;
 }
 
@@ -119,7 +123,7 @@ function greedyLineup(squad: SquadEntry[], formation: FormationDefinition): Line
 }
 
 export function buildAutomaticLineup(squad: SquadEntry[], formationId?: string, requestedStarters?: number): { formationId: string; lineup: LineupAssignment[]; score: number } {
-  const starterTarget = Math.min(requestedStarters ?? 11, squad.length);
+  const starterTarget = Math.min(getStartingLineupSize(requestedStarters ?? 11), squad.length);
   const eligible = FORMATIONS.filter(item => item.slots.length === starterTarget);
   const candidates = formationId
     ? [FORMATION_BY_ID.get(formationId)].filter((item): item is FormationDefinition => !!item && item.slots.length === starterTarget)
@@ -140,23 +144,31 @@ export function validateAndBuildLineup(squad: SquadEntry[], formationId: string,
   const formation = FORMATION_BY_ID.get(formationId);
   if (!formation) throw new Error("Choose a valid formation.");
   if (squad.length < 6 || squad.length > 27) throw new Error("Your squad must contain between 6 and 27 players before setting the lineup.");
-  const starterTarget = Math.min(requestedStarters ?? 11, squad.length);
+  const starterTarget = Math.min(getStartingLineupSize(requestedStarters ?? 11), squad.length);
   if (formation.slots.length !== starterTarget) throw new Error(`Choose a formation for ${starterTarget} starters.`);
   if (picks.length !== starterTarget) throw new Error(`Select exactly ${starterTarget} starting players.`);
   const slotIds = new Set(formation.slots.map(item => item.id));
   const squadIds = new Set(squad.map(item => item.footballer.id));
-  const uniqueSlots = new Set(picks.map(item => item.slotId));
-  const uniquePlayers = new Set(picks.map(item => item.footballerId));
-  if (uniqueSlots.size !== starterTarget || uniquePlayers.size !== starterTarget) throw new Error("Every formation slot and starting player must be unique.");
   if (picks.some(item => !slotIds.has(item.slotId))) throw new Error("A lineup slot does not belong to the chosen formation.");
   if (picks.some(item => !squadIds.has(item.footballerId))) throw new Error("A selected starter is not in your squad.");
 
-  return formation.slots.map(formationSlot => {
+  // Validate goalkeeper restrictions before duplicate checks so the player
+  // receives the most useful error when a goalkeeper is dragged outfield.
+  for (const formationSlot of formation.slots) {
     const pick = picks.find(item => item.slotId === formationSlot.id);
     const player = squad.find(item => item.footballer.id === pick?.footballerId)?.footballer;
     if (!pick || !player) throw new Error("Every formation slot must have a player.");
     if (formationSlot.role === "GK" && player.position !== "GK") throw new Error("Only a goalkeeper can be placed in the GK slot.");
     if (formationSlot.role !== "GK" && player.position === "GK") throw new Error("Goalkeepers cannot be placed in outfield positions.");
+  }
+
+  const uniqueSlots = new Set(picks.map(item => item.slotId));
+  const uniquePlayers = new Set(picks.map(item => item.footballerId));
+  if (uniqueSlots.size !== starterTarget || uniquePlayers.size !== starterTarget) throw new Error("Every formation slot and starting player must be unique.");
+
+  return formation.slots.map(formationSlot => {
+    const pick = picks.find(item => item.slotId === formationSlot.id)!;
+    const player = squad.find(item => item.footballer.id === pick.footballerId)!.footballer;
     return { slotId: formationSlot.id, footballerId: player.id, role: formationSlot.role, fit: calculatePlayerSlotFit(player, formationSlot.role) };
   });
 }

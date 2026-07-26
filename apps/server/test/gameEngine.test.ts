@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FORMATIONS, type ManagerView, type SquadEntry } from "@auction-eleven/shared";
+import { FORMATIONS, getOpeningBid, type ManagerView, type SquadEntry } from "@auction-eleven/shared";
 import { FOOTBALLERS } from "../src/footballers.js";
 import { buildAutomaticLineup, DEFAULT_SETTINGS, rankManagers, validateAndBuildLineup, validateBid } from "../src/gameEngine.js";
 
@@ -17,7 +17,8 @@ const emptyManager: ManagerView = {
   formationId: null,
   lineup: [],
   lineupSubmitted: false,
-  lineupScore: 0
+  lineupScore: 0,
+  auctionComplete: false
 };
 
 const sampleSquad: SquadEntry[] = [
@@ -28,14 +29,43 @@ const sampleSquad: SquadEntry[] = [
 ].map((footballer, index) => ({ footballer, price: footballer.basePrice, round: index + 1 }));
 
 describe("game defaults", () => {
-  it("uses a one-minute auction timer", () => expect(DEFAULT_SETTINGS.auctionSeconds).toBe(60));
-  it("builds 11 starters and 6 substitutes", () => expect(DEFAULT_SETTINGS.squadSize).toBe(17));
+  it("uses a fast twelve-second auction timer", () => expect(DEFAULT_SETTINGS.auctionSeconds).toBe(12));
+  it("builds an 11-player starting squad", () => expect(DEFAULT_SETTINGS.squadSize).toBe(11));
   it("defaults to a six-squad room capacity", () => expect(DEFAULT_SETTINGS.managerLimit).toBe(6));
   it("starts with 68 real-player base cards that can be mirrored for large rooms", () => expect(Object.values(DEFAULT_SETTINGS.poolTargets).reduce((sum, value) => sum + value, 0)).toBe(68));
+  it("keeps classic flat opening prices as the default", () => expect(DEFAULT_SETTINGS.pricingMode).toBe("normal"));
+});
+
+describe("opening price modes", () => {
+  const lowerRated = FOOTBALLERS.slice().sort((a, b) => a.overall - b.overall)[0]!;
+  const higherRated = FOOTBALLERS.slice().sort((a, b) => b.overall - a.overall)[0]!;
+
+  it("uses the same minimum opening bid in normal mode", () => {
+    expect(getOpeningBid(DEFAULT_SETTINGS, lowerRated)).toBe(DEFAULT_SETTINGS.minimumBid);
+    expect(getOpeningBid(DEFAULT_SETTINGS, higherRated)).toBe(DEFAULT_SETTINGS.minimumBid);
+  });
+
+  it("opens higher-rated players at a higher price in OVR mode", () => {
+    const settings = { ...DEFAULT_SETTINGS, pricingMode: "ovr_scaled" as const };
+    expect(getOpeningBid(settings, higherRated)).toBeGreaterThan(getOpeningBid(settings, lowerRated));
+  });
+
+  it("scales OVR prices to the selected room budget", () => {
+    const lowBudget = getOpeningBid({ ...DEFAULT_SETTINGS, pricingMode: "ovr_scaled", startingBudget: 300 }, higherRated);
+    const highBudget = getOpeningBid({ ...DEFAULT_SETTINGS, pricingMode: "ovr_scaled", startingBudget: 3000 }, higherRated);
+    expect(highBudget).toBeGreaterThan(lowBudget);
+  });
 });
 
 describe("validateBid", () => {
   it("accepts a valid opening bid", () => expect(validateBid({ amount: 1, currentBid: 0, manager: emptyManager, settings: DEFAULT_SETTINGS, auctionActive: true })).toBeNull());
+  it("requires the OVR-based opening price when that mode is selected", () => {
+    const footballer = FOOTBALLERS.slice().sort((a, b) => b.overall - a.overall)[0]!;
+    const settings = { ...DEFAULT_SETTINGS, pricingMode: "ovr_scaled" as const };
+    const opening = getOpeningBid(settings, footballer);
+    expect(validateBid({ amount: opening - settings.bidIncrement, currentBid: 0, manager: { ...emptyManager, budget: 1000 }, settings, auctionActive: true, footballer })).toMatch(/Minimum valid bid/i);
+    expect(validateBid({ amount: opening, currentBid: 0, manager: { ...emptyManager, budget: 1000 }, settings, auctionActive: true, footballer })).toBeNull();
+  });
   it("rejects a bid above budget", () => expect(validateBid({ amount: 101, currentBid: 50, manager: emptyManager, settings: DEFAULT_SETTINGS, auctionActive: true })).toMatch(/budget/i));
   it("rejects a stale auction", () => expect(validateBid({ amount: 1, currentBid: 0, manager: emptyManager, settings: DEFAULT_SETTINGS, auctionActive: false })).toMatch(/closed/i));
   it("rejects a mirrored copy already owned by the same manager", () => {
@@ -76,9 +106,11 @@ describe("formations and lineup ranking", () => {
   });
 
 
-  it("automatically uses an 8-player formation for an 8-player squad", () => {
-    const smallSquad = sampleSquad.slice(0, 8);
-    const automatic = buildAutomaticLineup(smallSquad);
+  it("automatically uses an 8-player formation for an eligible 8-player squad", () => {
+    const goalkeeper = sampleSquad.find(entry => entry.footballer.position === "GK")!;
+    const outfield = sampleSquad.filter(entry => entry.footballer.position !== "GK").slice(0, 7);
+    const smallSquad = [goalkeeper, ...outfield];
+    const automatic = buildAutomaticLineup(smallSquad, undefined, 8);
     expect(automatic.lineup).toHaveLength(8);
     expect(FORMATIONS.find(formation => formation.id === automatic.formationId)?.slots).toHaveLength(8);
   });

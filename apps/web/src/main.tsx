@@ -33,6 +33,9 @@ import {
   type SquadEntry
 } from "@auction-eleven/shared";
 import "./styles.css";
+import ronaldoHero from "./assets/ronaldo.webp";
+import messiHero from "./assets/messi.webp";
+import neymarHero from "./assets/neymar.webp";
 
 type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -88,6 +91,12 @@ const PRICING_MODES: Array<{ id: PricingMode; title: string; description: string
   { id: "ovr_scaled", title: "OVR Pricing", description: "Higher-rated footballers begin at a higher price." }
 ];
 const CHAT_EMOJIS = ["😀", "😂", "😍", "😎", "🤔", "😱", "😭", "😡", "👏", "🙌", "👍", "👎", "🤝", "🔥", "⚡", "💸", "💰", "🏆", "🥇", "⚽", "🥅", "🧤", "🚀", "🎯", "💪", "🧠", "❤️", "✅", "❌", "👀", "🎉", "🫡"];
+
+const LANDING_HEROES = [
+  { name: "Cristiano Ronaldo", tagline: "Elite mentality · decisive finishing", image: ronaldoHero, objectPosition: "center 38%" },
+  { name: "Lionel Messi", tagline: "Vision · control · match-winning creativity", image: messiHero, objectPosition: "center 48%" },
+  { name: "Neymar Jr", tagline: "Flair · movement · fearless attacking play", image: neymarHero, objectPosition: "center 34%" },
+] as const;
 const HERO_VIDEO = "https://stream.mux.com/Aa02T7oM1wH5Mk5EEVDYhbZ1ChcdhRsS2m1NYyx4Ua1g.m3u8";
 const photoCache = new Map<string, FootballerPhoto>();
 const pendingPhotos = new Map<string, Promise<FootballerPhoto>>();
@@ -342,7 +351,7 @@ function LoadingScreen({ onComplete }: { onComplete: () => void }) {
   </motion.div>;
 }
 
-function Brand() { return <a href="#home" className="brand"><div className="brand-mark"><span>11</span></div><div><strong>AUCTION</strong><em>ELEVEN</em></div></a>; }
+function Brand() { return <a href="#home" className="brand"><div className="brand-mark"><span>11</span></div><div><strong>WINNING</strong><em>ELEVEN</em></div></a>; }
 function Toast({ message, close }: { message: string; close: () => void }) { return <div className="toast"><span>!</span><p>{message}</p><button onClick={close}>×</button></div>; }
 
 function HeroVideo() {
@@ -368,6 +377,45 @@ function HeroVideo() {
     return () => { disposed = true; hls?.destroy(); };
   }, []);
   return <video ref={videoRef} className="hero-video" autoPlay muted loop playsInline aria-hidden="true" />;
+}
+
+function PlayerHeroSlider() {
+  const [index, setIndex] = useState(0);
+  const reduceMotion = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  useEffect(() => {
+    LANDING_HEROES.forEach(item => { const image = new Image(); image.src = item.image; });
+    if (reduceMotion) return;
+    const timer = window.setInterval(() => setIndex(current => (current + 1) % LANDING_HEROES.length), 4600);
+    return () => window.clearInterval(timer);
+  }, [reduceMotion]);
+
+  const active = LANDING_HEROES[index];
+  return <section className="player-hero-slider" aria-label="Featured footballers">
+    <div className="player-hero-pattern" aria-hidden="true" />
+    <div className="player-hero-copy">
+      <span>FEATURED STAR</span>
+      <strong>{active.name}</strong>
+      <p>{active.tagline}</p>
+    </div>
+    <div className="player-hero-media">
+      <AnimatePresence mode="wait">
+        <motion.img
+          key={active.name}
+          src={active.image}
+          alt={active.name}
+          className="player-hero-image"
+          style={{ objectPosition: active.objectPosition }}
+          initial={reduceMotion ? false : { opacity: 0, x: 34, scale: 1.025 }}
+          animate={{ opacity: 1, x: 0, scale: 1 }}
+          exit={reduceMotion ? undefined : { opacity: 0, x: -26, scale: .99 }}
+          transition={{ duration: reduceMotion ? 0 : .7, ease: [0.22, 1, 0.36, 1] }}
+        />
+      </AnimatePresence>
+      <div className="player-hero-overlay" />
+    </div>
+    <div className="player-hero-dots">{LANDING_HEROES.map((item, dotIndex) => <button type="button" key={item.name} aria-label={`Show ${item.name}`} className={dotIndex === index ? "active" : ""} onClick={() => setIndex(dotIndex)} />)}</div>
+  </section>;
 }
 
 function Landing({ socket, saveSeat, setError }: { socket: GameSocket; saveSeat: (code: string, id: string) => void; setError: (value: string) => void }) {
@@ -430,15 +478,15 @@ function Landing({ socket, saveSeat, setError }: { socket: GameSocket; saveSeat:
 
   return <main className="landing" id="home">
     <section className="landing-hero">
-      <HeroVideo /><div className="hero-shade" /><div className="hero-fade" />
-      <div className="hero-content" ref={copyRef}>
+      <HeroVideo /><div className="hero-shade" /><div className="hero-fade" /><div className="hero-green-grid" aria-hidden="true" />
+      <div className="hero-layout"><div className="hero-content" ref={copyRef}>
         <div className="eyebrow">THE NEXT-GEN FOOTBALL AUCTION EXPERIENCE · 2026</div>
         <h1 ref={titleRef}>Win the market.<br /><span>Build the eleven.</span></h1>
         <p>Fast live auctions, tactical squad building, public room discovery, password-protected lobbies, and a server-ranked final podium.</p>
         <div className="hero-actions"><a className="primary" href="#play">Enter match hub</a><button className="secondary" onClick={() => setDirectoryOpen(true)}>Find live rooms</button></div>
         <div className="feature-row"><span>Public + locked rooms</span><span>OVR + normal pricing</span><span>2–8 managers</span></div>
       </div>
-      <div className="scroll-indicator"><span>SCROLL</span><i /></div>
+      <PlayerHeroSlider /></div><div className="scroll-indicator"><span>SCROLL</span><i /></div>
     </section>
 
     <section className="landing-section" id="how">

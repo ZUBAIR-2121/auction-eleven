@@ -5,6 +5,7 @@ export type ManagerLimit = 2 | 3 | 4 | 5 | 6 | 7 | 8;
 export type SquadSize = 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
 export type BotDifficulty = "Amateur" | "Professional" | "World Class" | "Legendary";
 export type PricingMode = "normal" | "ovr_scaled";
+export type RoomAccess = "public" | "password";
 export const MAX_SUBSTITUTES = 10;
 /** The number of players placed on the pitch for the selected squad target. */
 export const getStartingLineupSize = (squadSize: number): number => Math.min(11, Math.max(6, Math.round(squadSize)));
@@ -265,12 +266,35 @@ export interface ChatMessage {
   sentAt: number;
 }
 
+export interface RoomDirectoryEntry {
+  code: string;
+  hostName: string;
+  access: RoomAccess;
+  hasPassword: boolean;
+  managerCount: number;
+  managerLimit: ManagerLimit;
+  openSlots: number;
+  pricingMode: PricingMode;
+  squadSize: SquadSize;
+  auctionSeconds: number;
+  createdAt: number;
+}
+
+export interface RoomDirectoryFilters {
+  managerLimit?: ManagerLimit;
+  pricingMode?: PricingMode;
+  access?: RoomAccess;
+}
+
 export interface RoomState {
   code: string;
   phase: GamePhase;
   version: number;
   hostId: string;
   isSolo: boolean;
+  access: RoomAccess;
+  hasPassword: boolean;
+  createdAt: number;
   managers: ManagerView[];
   settings: GameSettings;
   availableFootballers: Footballer[];
@@ -293,8 +317,10 @@ export interface RoomState {
 }
 
 export interface ClientToServerEvents {
-  "room:create": (payload: { name: string; sessionId: string; solo?: boolean }, ack: Ack<{ code: string; managerId: string }>) => void;
-  "room:join": (payload: { code: string; name: string; sessionId: string }, ack: Ack<{ code: string; managerId: string }>) => void;
+  "room:create": (payload: { name: string; sessionId: string; solo?: boolean; access?: RoomAccess; password?: string }, ack: Ack<{ code: string; managerId: string }>) => void;
+  "room:join": (payload: { code: string; name: string; sessionId: string; password?: string }, ack: Ack<{ code: string; managerId: string }>) => void;
+  "rooms:list": (payload: { filters?: RoomDirectoryFilters }, ack: Ack<RoomDirectoryEntry[]>) => void;
+  "room:updateAccess": (payload: { code: string; access: RoomAccess; password?: string }, ack: Ack<null>) => void;
   "room:resume": (payload: { code: string; sessionId: string }, ack: Ack<{ managerId: string }>) => void;
   "room:leave": (payload: { code: string }, ack: Ack<null>) => void;
   "room:replaceWithAI": (payload: { code: string; managerId: string }, ack: Ack<null>) => void;
@@ -314,6 +340,7 @@ export interface ClientToServerEvents {
 
 export interface ServerToClientEvents {
   "room:state": (state: RoomState) => void;
+  "rooms:changed": () => void;
   "room:error": (message: string) => void;
   "room:reaction": (payload: { managerName: string; reaction: string; at: number }) => void;
   "chat:typing": (payload: { managerId: string; managerName: string; isTyping: boolean }) => void;

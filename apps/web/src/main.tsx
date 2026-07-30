@@ -24,6 +24,9 @@ import {
   type PoolTargets,
   type Position,
   type PricingMode,
+  type RoomAccess,
+  type RoomDirectoryEntry,
+  type RoomDirectoryFilters,
   type RoomState,
   type SquadSize,
   type ServerToClientEvents,
@@ -370,40 +373,188 @@ function HeroVideo() {
 function Landing({ socket, saveSeat, setError }: { socket: GameSocket; saveSeat: (code: string, id: string) => void; setError: (value: string) => void }) {
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
+  const [directPassword, setDirectPassword] = useState("");
+  const [createAccess, setCreateAccess] = useState<RoomAccess>("public");
+  const [createPassword, setCreatePassword] = useState("");
+  const [directoryOpen, setDirectoryOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const copyRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     const timeline = gsap.timeline({ defaults: { ease: "power3.out" } });
     if (titleRef.current) timeline.fromTo(titleRef.current, { opacity: 0, y: 55 }, { opacity: 1, y: 0, duration: 1.15 }, .1);
     if (copyRef.current) timeline.fromTo(copyRef.current.children, { opacity: 0, y: 20, filter: "blur(9px)" }, { opacity: 1, y: 0, filter: "blur(0px)", stagger: .1, duration: .8 }, .3);
     return () => { timeline.kill(); };
   }, []);
-  const act = (mode: "create" | "join" | "solo") => {
-    if (name.trim().length < 2) { setError("Enter a manager name with at least two characters."); return; }
-    setBusy(true);
-    if (mode === "join") {
-      socket.emit("room:join", { code, name, sessionId }, response => {
-        setBusy(false);
-        response.ok ? saveSeat(response.data.code, response.data.managerId) : setError(response.error);
-      });
-    } else {
-      socket.emit("room:create", { name, sessionId, solo: mode === "solo" }, response => {
-        setBusy(false);
-        response.ok ? saveSeat(response.data.code, response.data.managerId) : setError(response.error);
-      });
+
+  const validateName = () => {
+    if (name.trim().length < 2) {
+      setError("Enter a manager name with at least two characters.");
+      return false;
     }
+    return true;
   };
+
+  const createRoom = (solo = false) => {
+    if (!validateName()) return;
+    if (!solo && createAccess === "password" && createPassword.trim().length < 4) {
+      setError("Password rooms need a password with at least four characters.");
+      return;
+    }
+    setBusy(true);
+    socket.emit("room:create", {
+      name,
+      sessionId,
+      solo,
+      access: solo ? "public" : createAccess,
+      password: !solo && createAccess === "password" ? createPassword : undefined
+    }, response => {
+      setBusy(false);
+      response.ok ? saveSeat(response.data.code, response.data.managerId) : setError(response.error);
+    });
+  };
+
+  const joinCode = () => {
+    if (!validateName()) return;
+    if (code.trim().length !== 6) {
+      setError("Enter a valid six-character room code.");
+      return;
+    }
+    setBusy(true);
+    socket.emit("room:join", { code, name, sessionId, password: directPassword || undefined }, response => {
+      setBusy(false);
+      response.ok ? saveSeat(response.data.code, response.data.managerId) : setError(response.error);
+    });
+  };
+
   return <main className="landing" id="home">
     <section className="landing-hero">
       <HeroVideo /><div className="hero-shade" /><div className="hero-fade" />
-      <div className="hero-content" ref={copyRef}><div className="eyebrow">THE FOOTBALL AUCTION EXPERIENCE · 2026</div><h1 ref={titleRef}>Build the squad.<br /><span>Own the room.</span></h1><p>Bid live, track every positional need, assemble your strongest eleven, and let the server rank the final podium.</p><div className="hero-actions"><a className="primary" href="#play">Start auction</a><a className="secondary" href="#how">Explore game</a></div><div className="feature-row"><span>6–17 player squads</span><span>38 formations</span><span>2–8 manager rooms</span></div></div>
+      <div className="hero-content" ref={copyRef}>
+        <div className="eyebrow">THE NEXT-GEN FOOTBALL AUCTION EXPERIENCE · 2026</div>
+        <h1 ref={titleRef}>Win the market.<br /><span>Build the eleven.</span></h1>
+        <p>Fast live auctions, tactical squad building, public room discovery, password-protected lobbies, and a server-ranked final podium.</p>
+        <div className="hero-actions"><a className="primary" href="#play">Enter match hub</a><button className="secondary" onClick={() => setDirectoryOpen(true)}>Find live rooms</button></div>
+        <div className="feature-row"><span>Public + locked rooms</span><span>OVR + normal pricing</span><span>2–8 managers</span></div>
+      </div>
       <div className="scroll-indicator"><span>SCROLL</span><i /></div>
     </section>
-    <section className="landing-section" id="how"><div className="section-kicker"><i /> GAME FLOW</div><div className="section-heading"><h2>One room. <em>Every decision matters.</em></h2><p>An original dark football-game interface with clear auction information and tactical team building.</p></div><div className="bento-grid"><article className="bento-card bento-wide"><span>01</span><h3>Host your auction</h3><p>Select the room’s real footballers, choose a 2–8-manager capacity, and invite managers with one code.</p><b>PRIVATE MULTIPLAYER</b></article><article className="bento-card"><span>02</span><h3>Bid with context</h3><p>Your live squad window shows GK, DEF, MID and FWD totals while every bid is running.</p><b>POSITION TRACKER</b></article><article className="bento-card"><span>03</span><h3>Assemble the XI</h3><p>Choose a formation matched to your squad size, arrange starters and substitutes, then receive a server-calculated podium.</p><b>TACTICAL RANKING</b></article></div></section>
-    <section className="play-section" id="play"><div className="play-copy"><div className="section-kicker"><i /> ENTER THE ARENA</div><h2>Your next great squad starts with <em>one bid.</em></h2><p>Create a private room, join friends, or practise against AI managers.</p></div><section className="entry-card"><div className="card-glow" /><h3>Manager access</h3><label>MANAGER NAME<input maxLength={18} value={name} onChange={event => setName(event.target.value)} placeholder="e.g. Shadow XI" /></label><button className="primary" disabled={busy} onClick={() => act("create")}>Create private room <b>↗</b></button><button className="secondary" disabled={busy} onClick={() => act("solo")}>Solo practice vs AI</button><div className="divider"><span>OR JOIN A ROOM</span></div><div className="join-row"><input className="code-input" maxLength={6} value={code} onChange={event => setCode(event.target.value.toUpperCase())} placeholder="ROOM CODE" /><button disabled={busy || code.length < 6} onClick={() => act("join")}>JOIN</button></div><small>Real-player portraits load from Wikimedia Commons with source links.</small></section></section>
+
+    <section className="landing-section" id="how">
+      <div className="section-kicker"><i /> GAME FLOW</div>
+      <div className="section-heading"><h2>Every screen built for <em>fast decisions.</em></h2><p>A responsive football-game interface designed for desktop, tablet, and mobile without forcing landscape orientation.</p></div>
+      <div className="bento-grid">
+        <article className="bento-card bento-wide"><span>01</span><h3>Create your lobby</h3><p>Launch an open room anyone can discover, or protect the room with a password while keeping it visible in the browser.</p><b>PUBLIC + PASSWORD ACCESS</b></article>
+        <article className="bento-card"><span>02</span><h3>Bid with context</h3><p>See opening value, squad needs, live rivals, remaining budget, and position coverage while every round is moving.</p><b>LIVE AUCTION INTELLIGENCE</b></article>
+        <article className="bento-card"><span>03</span><h3>Build the formation</h3><p>Drag starters and substitutes across the pitch on mouse or touch, then lock your tactical lineup for server scoring.</p><b>MOBILE DRAG SYSTEM</b></article>
+      </div>
+    </section>
+
+    <section className="play-section" id="play">
+      <div className="play-copy"><div className="section-kicker"><i /> MATCH HUB</div><h2>Choose how the room <em>opens.</em></h2><p>Open rooms appear in Find Room and join instantly. Password rooms are also listed, but require the correct password before a seat is granted.</p></div>
+      <section className="entry-card match-entry-card">
+        <div className="card-glow" /><h3>Manager access</h3>
+        <label>MANAGER NAME<input maxLength={18} value={name} onChange={event => setName(event.target.value)} placeholder="e.g. Shadow XI" autoComplete="nickname" /></label>
+        <div className="access-choice" role="group" aria-label="Room access type">
+          <button type="button" className={createAccess === "public" ? "active" : ""} onClick={() => setCreateAccess("public")}><span>◎</span><strong>OPEN ROOM</strong><small>Listed publicly · one-click join</small></button>
+          <button type="button" className={createAccess === "password" ? "active" : ""} onClick={() => setCreateAccess("password")}><span>◆</span><strong>PASSWORD ROOM</strong><small>Listed publicly · password required</small></button>
+        </div>
+        <AnimatePresence initial={false}>{createAccess === "password" && <motion.label initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="password-field">ROOM PASSWORD<input type="password" minLength={4} maxLength={32} value={createPassword} onChange={event => setCreatePassword(event.target.value)} placeholder="4–32 characters" autoComplete="new-password" /></motion.label>}</AnimatePresence>
+        <button className="primary create-room-button" disabled={busy} onClick={() => createRoom(false)}>Create {createAccess === "password" ? "password" : "open"} room <b>↗</b></button>
+        <button className="secondary" disabled={busy} onClick={() => createRoom(true)}>Solo practice vs AI</button>
+        <div className="divider"><span>JOIN DIRECTLY</span></div>
+        <div className="direct-join-grid"><input className="code-input" maxLength={6} value={code} onChange={event => setCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))} placeholder="ROOM CODE" aria-label="Room code" /><input type="password" maxLength={32} value={directPassword} onChange={event => setDirectPassword(event.target.value)} placeholder="PASSWORD IF NEEDED" aria-label="Room password" /><button disabled={busy || code.length < 6} onClick={joinCode}>JOIN</button></div>
+        <button className="room-browser-launch" type="button" onClick={() => setDirectoryOpen(true)}><span>⌕</span><div><strong>FIND ROOM</strong><small>Browse open and password lobbies</small></div><b>→</b></button>
+        <small>Room passwords are verified by the server and are never included in public room data.</small>
+      </section>
+    </section>
     <footer className="landing-footer"><Brand /><span>Original football auction game · In-game credits have no monetary value.</span></footer>
+    <AnimatePresence>{directoryOpen && <RoomDirectory socket={socket} managerName={name} saveSeat={saveSeat} setError={setError} onClose={() => setDirectoryOpen(false)} />}</AnimatePresence>
   </main>;
+}
+
+function RoomDirectory({ socket, managerName, saveSeat, setError, onClose }: { socket: GameSocket; managerName: string; saveSeat: (code: string, id: string) => void; setError: (value: string) => void; onClose: () => void }) {
+  const [rooms, setRooms] = useState<RoomDirectoryEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [joiningCode, setJoiningCode] = useState("");
+  const [passwordRoom, setPasswordRoom] = useState<RoomDirectoryEntry | null>(null);
+  const [password, setPassword] = useState("");
+  const [managerLimit, setManagerLimit] = useState<"all" | ManagerLimit>("all");
+  const [pricingMode, setPricingMode] = useState<"all" | PricingMode>("all");
+  const [access, setAccess] = useState<"all" | RoomAccess>("all");
+
+  const loadRooms = React.useCallback(() => {
+    setLoading(true);
+    const filters: RoomDirectoryFilters = {};
+    if (managerLimit !== "all") filters.managerLimit = managerLimit;
+    if (pricingMode !== "all") filters.pricingMode = pricingMode;
+    if (access !== "all") filters.access = access;
+    socket.emit("rooms:list", { filters }, response => {
+      setLoading(false);
+      if (!response.ok) setError(response.error);
+      else setRooms(response.data);
+    });
+  }, [access, managerLimit, pricingMode, setError, socket]);
+
+  useEffect(() => {
+    loadRooms();
+    socket.on("rooms:changed", loadRooms);
+    return () => { socket.off("rooms:changed", loadRooms); };
+  }, [loadRooms, socket]);
+
+  const join = (room: RoomDirectoryEntry, roomPassword?: string) => {
+    if (managerName.trim().length < 2) {
+      setError("Enter your manager name before joining a room.");
+      return;
+    }
+    if (room.openSlots < 1) {
+      setError(`Room full: ${room.managerCount}/${room.managerLimit} managers have joined.`);
+      return;
+    }
+    if (room.hasPassword && roomPassword === undefined) {
+      setPasswordRoom(room);
+      setPassword("");
+      return;
+    }
+    setJoiningCode(room.code);
+    socket.emit("room:join", { code: room.code, name: managerName, sessionId, password: roomPassword }, response => {
+      setJoiningCode("");
+      if (!response.ok) setError(response.error);
+      else {
+        onClose();
+        saveSeat(response.data.code, response.data.managerId);
+      }
+    });
+  };
+
+  return <motion.div className="room-directory-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} role="dialog" aria-modal="true" aria-label="Find room">
+    <motion.section className="room-directory" initial={{ opacity: 0, y: 36, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: .985 }} transition={{ type: "spring", stiffness: 280, damping: 28 }}>
+      <header className="directory-head"><div><div className="eyebrow">LIVE MATCHMAKING</div><h2>Find a room</h2><p>Open rooms join instantly. Locked rooms stay visible but require their password.</p></div><button className="modal-close" onClick={onClose} aria-label="Close room browser">×</button></header>
+      <div className="directory-filters">
+        <label><span>ROOM SIZE</span><select value={managerLimit} onChange={event => setManagerLimit(event.target.value === "all" ? "all" : Number(event.target.value) as ManagerLimit)}><option value="all">All sizes</option>{MANAGER_LIMITS.map(limit => <option value={limit} key={limit}>{limit} managers</option>)}</select></label>
+        <label><span>PRICING</span><select value={pricingMode} onChange={event => setPricingMode(event.target.value as "all" | PricingMode)}><option value="all">All modes</option><option value="normal">Normal pricing</option><option value="ovr_scaled">OVR pricing</option></select></label>
+        <label><span>ACCESS</span><select value={access} onChange={event => setAccess(event.target.value as "all" | RoomAccess)}><option value="all">All rooms</option><option value="public">Open rooms</option><option value="password">Password rooms</option></select></label>
+        <button className="directory-refresh" onClick={loadRooms} disabled={loading}>↻ <span>REFRESH</span></button>
+      </div>
+      <div className="directory-summary"><span><i className="online" /> {rooms.filter(room => room.openSlots > 0).length} joinable</span><span>{rooms.length} matching rooms</span></div>
+      <div className="room-list">
+        {loading && rooms.length === 0 && <div className="directory-empty"><span className="directory-loader" /><strong>Scanning live rooms</strong><small>Checking the server directory…</small></div>}
+        {!loading && rooms.length === 0 && <div className="directory-empty"><span>⌁</span><strong>No matching rooms</strong><small>Create a new room or change the filters.</small></div>}
+        {rooms.map(room => {
+          const full = room.openSlots < 1;
+          return <article className={`directory-room ${full ? "full" : ""}`} key={room.code}>
+            <div className="directory-room-icon">{room.hasPassword ? "◆" : "◎"}</div>
+            <div className="directory-room-main"><div><strong>{room.hostName}'s room</strong><span className={room.hasPassword ? "locked" : "open"}>{room.hasPassword ? "PASSWORD" : "OPEN"}</span></div><small>Code {room.code} · {room.squadSize}-player squad · {room.auctionSeconds}s rounds</small><div className="directory-room-tags"><span>{room.pricingMode === "ovr_scaled" ? "OVR PRICING" : "NORMAL PRICING"}</span><span>{room.managerLimit} MANAGER ROOM</span></div></div>
+            <div className="directory-occupancy"><div><b>{room.managerCount}</b><span>/{room.managerLimit}</span></div><small>{full ? "ROOM FULL" : `${room.openSlots} OPEN`}</small></div>
+            <button className="directory-join" disabled={full || joiningCode === room.code} onClick={() => join(room)}>{full ? "FULL" : joiningCode === room.code ? "JOINING…" : room.hasPassword ? "ENTER PASSWORD" : "JOIN ROOM"}</button>
+          </article>;
+        })}
+      </div>
+      <footer className="directory-footer"><span>Rooms disappear from this list when the auction starts.</span><button className="secondary" onClick={onClose}>Close browser</button></footer>
+    </motion.section>
+    <AnimatePresence>{passwordRoom && <motion.div className="password-dialog-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={event => { if (event.target === event.currentTarget) setPasswordRoom(null); }}><motion.form className="password-dialog" initial={{ y: 24, scale: .96 }} animate={{ y: 0, scale: 1 }} exit={{ y: 18, scale: .97 }} onSubmit={event => { event.preventDefault(); join(passwordRoom, password); }}><span className="password-room-icon">◆</span><div className="eyebrow">LOCKED ROOM · {passwordRoom.code}</div><h3>Enter room password</h3><p>{passwordRoom.hostName}'s room has {passwordRoom.openSlots} seat{passwordRoom.openSlots === 1 ? "" : "s"} remaining.</p><input autoFocus type="password" minLength={4} maxLength={32} value={password} onChange={event => setPassword(event.target.value)} placeholder="Room password" autoComplete="current-password" /><div><button type="button" className="secondary" onClick={() => setPasswordRoom(null)}>Cancel</button><button type="submit" className="primary" disabled={password.length < 4 || joiningCode === passwordRoom.code}>{joiningCode === passwordRoom.code ? "Joining…" : "Unlock & join"}</button></div></motion.form></motion.div>}</AnimatePresence>
+  </motion.div>;
 }
 
 function countPool(players: Footballer[], selectedIds: string[]): PoolTargets {
@@ -417,6 +568,7 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
   const me = state.managers.find(manager => manager.id === managerId)!;
   const isHost = state.hostId === managerId;
   const [poolOpen, setPoolOpen] = useState(false);
+  const [roomPassword, setRoomPassword] = useState("");
   const counts = useMemo(() => countPool(state.availableFootballers, state.selectedFootballerIds), [state.availableFootballers, state.selectedFootballerIds]);
   const starterCount = getStartingLineupSize(state.settings.squadSize);
   const requiredSubstitutes = Math.max(0, state.settings.squadSize - starterCount);
@@ -443,17 +595,28 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
   const changePricingMode = (pricingMode: PricingMode) => {
     socket.emit("room:updateSettings", { code: state.code, settings: { pricingMode } }, response => { if (!response.ok) setError(response.error); });
   };
+  const changeRoomAccess = (access: RoomAccess) => {
+    if (access === "password" && !state.hasPassword && roomPassword.trim().length < 4) {
+      setError("Enter a room password with at least four characters first.");
+      return;
+    }
+    socket.emit("room:updateAccess", { code: state.code, access, password: access === "password" && roomPassword.trim() ? roomPassword : undefined }, response => {
+      if (!response.ok) setError(response.error);
+      else setRoomPassword("");
+    });
+  };
   const toggleReady = () => socket.emit("room:ready", { code: state.code, ready: !me.ready }, response => { if (!response.ok) setError(response.error); });
   const start = () => socket.emit("game:start", { code: state.code }, response => { if (!response.ok) setError(response.error); });
 
   return <main className="lobby page">
     <div className="room-return-row"><button className="room-back-button" onClick={leave}><span>←</span><div><b>BACK TO GAME MENU</b><small>Leave this room safely</small></div></button></div>
-    <div className="lobby-head"><div><div className="eyebrow">{state.isSolo ? "SOLO PRACTICE LOBBY" : "PRIVATE MATCH LOBBY"}</div><h1>Managers’ Tunnel</h1><p>Each manager builds {starterCount} starters, reaches a {state.settings.squadSize}-player squad target, and may buy up to {substituteCount} substitutes when budget remains.</p></div><div className="room-code"><span>ROOM CODE</span><strong>{state.code}</strong><button onClick={() => navigator.clipboard.writeText(state.code)}>COPY</button></div></div>
+    <div className="lobby-head"><div><div className="eyebrow">{state.isSolo ? "SOLO PRACTICE LOBBY" : state.access === "password" ? "PASSWORD MATCH LOBBY" : "PUBLIC MATCH LOBBY"}</div><h1>Managers’ Tunnel</h1><p>Each manager builds {starterCount} starters, reaches a {state.settings.squadSize}-player squad target, and may buy up to {substituteCount} substitutes when budget remains.</p></div><div className="room-code"><span>ROOM CODE</span><strong>{state.code}</strong><button onClick={() => navigator.clipboard.writeText(state.code)}>COPY</button></div></div>
     <div className="lobby-grid"><section className="panel managers-panel"><div className="panel-title"><h2>Room managers</h2><span>{state.managers.length}/{state.settings.managerLimit}</span></div><div className="manager-cards">{state.managers.map(manager => <div className={`manager-card ${manager.ready ? "ready" : ""}`} key={manager.id}><div className="avatar">{manager.avatar}</div><div><strong>{manager.name}</strong><small>{manager.isHost ? "HOST" : manager.isBot ? "AI MANAGER" : "CHALLENGER"}</small></div><div className="ready-tag">{manager.ready ? "READY" : manager.connected ? "WAITING" : "DISCONNECTED"}</div>{isHost && !manager.connected && !manager.isHost && <button className="replace-ai" onClick={() => socket.emit("room:replaceWithAI", { code: state.code, managerId: manager.id }, response => { if (!response.ok) setError(response.error); })}>REPLACE WITH AI</button>}</div>)}</div><div className="squad-rule-card"><b>{state.settings.squadSize}</b><div><strong>SQUAD TARGET</strong><span>{starterCount} starters{requiredSubstitutes ? ` + at least ${requiredSubstitutes} substitute${requiredSubstitutes === 1 ? "" : "s"}` : ""} · up to {substituteCount} substitutes</span></div></div></section>
       <section className="panel settings"><div className="panel-title"><h2>Match setup</h2><span>{isHost ? "HOST CONTROL" : "LOCKED"}</span></div>
         <Setting label="Starting budget" value={`${state.settings.startingBudget}M`}><input disabled={!isHost} type="range" min="300" max="3000" step="50" value={state.settings.startingBudget} onChange={event => changeNumber("startingBudget", +event.target.value)} /></Setting>
         <Setting label="Auction timer" value={`${state.settings.auctionSeconds}s`}><input disabled={!isHost} type="range" min="10" max="30" step="1" value={state.settings.auctionSeconds} onChange={event => changeNumber("auctionSeconds", +event.target.value)} /></Setting>
         <Setting label="Formation time limit" value={`${Math.round(state.settings.formationSeconds / 60)} min`}><input disabled={!isHost} type="range" min="120" max="600" step="60" value={state.settings.formationSeconds} onChange={event => changeNumber("formationSeconds", +event.target.value)} /></Setting>
+        {!state.isSolo && <div className="manager-limit-setting room-access-setting"><div><span>ROOM ACCESS</span><b>{state.access === "password" ? "PASSWORD" : "OPEN"}</b></div><div className="preset-buttons pricing-mode-buttons"><button disabled={!isHost} className={state.access === "public" ? "active" : ""} onClick={() => changeRoomAccess("public")}><strong>Open room</strong><small>Visible in Find Room and joins instantly.</small></button><button disabled={!isHost} className={state.access === "password" ? "active" : ""} onClick={() => changeRoomAccess("password")}><strong>Password room</strong><small>Visible in Find Room but locked.</small></button></div>{isHost && <div className="lobby-password-row"><input type="password" maxLength={32} value={roomPassword} onChange={event => setRoomPassword(event.target.value)} placeholder={state.hasPassword ? "Enter a new password to replace it" : "Set password (4–32 characters)"} /><button disabled={roomPassword.trim().length < 4} onClick={() => changeRoomAccess("password")}>{state.hasPassword ? "UPDATE PASSWORD" : "SET PASSWORD"}</button></div>}<small>{state.hasPassword ? "A password is active. It is never sent to other players or shown in the room directory." : "Open rooms can be joined without a password."}</small></div>}
         <div className="manager-limit-setting pricing-mode-setting"><div><span>PLAYER STARTING PRICES</span><b>{state.settings.pricingMode === "ovr_scaled" ? "OVR PRICING" : "NORMAL"}</b></div><div className="preset-buttons pricing-mode-buttons">{PRICING_MODES.map(mode => <button disabled={!isHost} className={state.settings.pricingMode === mode.id ? "active" : ""} onClick={() => changePricingMode(mode.id)} key={mode.id}><strong>{mode.title}</strong><small>{mode.description}</small></button>)}</div><small>{state.settings.pricingMode === "ovr_scaled" ? "The opening bid uses each player's OVR and market value, scaled to the room budget." : "Classic mode keeps the same opening bid for every footballer."}</small></div>
         <div className="manager-limit-setting difficulty-setting"><div><span>AI DIFFICULTY</span><b>{state.settings.botDifficulty.toUpperCase()}</b></div><div className="preset-buttons difficulty-buttons">{BOT_DIFFICULTIES.map(level => <button disabled={!isHost || !state.isSolo} className={state.settings.botDifficulty === level ? "active" : ""} onClick={() => changeBotDifficulty(level)} key={level}>{level}</button>)}</div><small>{state.isSolo ? "Higher levels value positional needs, budget timing and late-round bidding more accurately." : "AI difficulty is used in Solo Practice rooms."}</small></div>
         <div className="manager-limit-setting"><div><span>ROOM CAPACITY</span><b>{state.settings.managerLimit} MANAGERS</b></div><div className="preset-buttons compact-presets">{MANAGER_LIMITS.map(limit => <button disabled={!isHost || (!state.isSolo && limit < state.managers.length)} className={state.settings.managerLimit === limit ? "active" : ""} onClick={() => changeManagerLimit(limit)} key={limit}>{limit}</button>)}</div><small>{state.isSolo ? "AI managers are added automatically." : "Rooms support a minimum of 2 and maximum of 8 managers."}</small></div>

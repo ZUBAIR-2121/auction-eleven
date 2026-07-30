@@ -33,7 +33,8 @@ const server=http.createServer(app);
 const io=new Server<ClientToServerEvents,ServerToClientEvents>(server,{cors:{origin:CLIENT_ORIGIN,credentials:true},pingInterval:10000,pingTimeout:12000,maxHttpBufferSize:100_000});
 const rooms=new RoomManager(
   (code,state)=>io.to(code).emit("room:state",state),
-  (code,payload)=>io.to(code).emit("room:reaction",payload)
+  (code,payload)=>io.to(code).emit("room:reaction",payload),
+  ()=>io.emit("rooms:changed")
 );
 
 const safeAck=(ack:Function,fn:()=>unknown)=>{try{ack({ok:true,data:fn()})}catch(error){ack({ok:false,error:error instanceof Error?error.message:"Unexpected server error."})}};
@@ -41,13 +42,15 @@ const safeAck=(ack:Function,fn:()=>unknown)=>{try{ack({ok:true,data:fn()})}catch
 io.on("connection",socket=>{
   let managerId:string|null=null;
   let roomCode:string|null=null;
-  socket.on("room:create",(payload,ack)=>safeAck(ack,()=>{const result=rooms.create(payload.name,payload.sessionId,socket.id,!!payload.solo);managerId=result.managerId;roomCode=result.code;socket.join(result.code);socket.emit("room:state",rooms.getState(result.code));return result;}));
-  socket.on("room:join",(payload,ack)=>safeAck(ack,()=>{const result=rooms.join(payload.code,payload.name,payload.sessionId,socket.id);managerId=result.managerId;roomCode=result.code;socket.join(result.code);socket.emit("room:state",rooms.getState(result.code));return result;}));
+  socket.on("room:create",(payload,ack)=>safeAck(ack,()=>{const result=rooms.create(payload.name,payload.sessionId,socket.id,!!payload.solo,payload.access,payload.password);managerId=result.managerId;roomCode=result.code;socket.join(result.code);socket.emit("room:state",rooms.getState(result.code));return result;}));
+  socket.on("room:join",(payload,ack)=>safeAck(ack,()=>{const result=rooms.join(payload.code,payload.name,payload.sessionId,socket.id,payload.password);managerId=result.managerId;roomCode=result.code;socket.join(result.code);socket.emit("room:state",rooms.getState(result.code));return result;}));
+  socket.on("rooms:list",(payload,ack)=>safeAck(ack,()=>rooms.listRooms(payload.filters)));
   socket.on("room:resume",(payload,ack)=>safeAck(ack,()=>{const result=rooms.resume(payload.code,payload.sessionId,socket.id);managerId=result.managerId;roomCode=payload.code.toUpperCase();socket.join(roomCode);socket.emit("room:state",rooms.getState(roomCode));return result;}));
   socket.on("room:leave",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.leave(payload.code,managerId);socket.leave(payload.code.toUpperCase());managerId=null;roomCode=null;return null;}));
   socket.on("room:replaceWithAI",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.replaceWithAI(payload.code,managerId,payload.managerId);return null;}));
   socket.on("room:ready",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.setReady(payload.code,managerId,payload.ready);return null;}));
   socket.on("room:updateSettings",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.updateSettings(payload.code,managerId,payload.settings);return null;}));
+  socket.on("room:updateAccess",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.updateAccess(payload.code,managerId,payload.access,payload.password);return null;}));
   socket.on("room:updatePlayerPool",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.updatePlayerPool(payload.code,managerId,payload.selectedFootballerIds);return null;}));
   socket.on("game:start",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.start(payload.code,managerId);return null;}));
   socket.on("game:quitSolo",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.quitSolo(payload.code,managerId);managerId=null;roomCode=null;return null;}));

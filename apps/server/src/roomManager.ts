@@ -10,6 +10,9 @@ import type {
   ManagerView,
   PoolTargets,
   Position,
+  RoomAccess,
+  RoomDirectoryEntry,
+  RoomDirectoryFilters,
   RoomState
 } from "@auction-eleven/shared";
 import { z } from "zod";
@@ -28,7 +31,7 @@ interface InternalManager extends ManagerView {
   socketId: string | null;
 }
 
-interface InternalRoom extends Omit<RoomState, "managers" | "availableFootballers" | "poolSelectionValid"> {
+interface InternalRoom extends Omit<RoomState, "managers" | "availableFootballers" | "poolSelectionValid" | "hasPassword"> {
   managers: InternalManager[];
   footballerPool: Footballer[];
   seenRequestIds: Set<string>;
@@ -38,6 +41,8 @@ interface InternalRoom extends Omit<RoomState, "managers" | "availableFootballer
   lastChatAt: Map<string, number>;
   lastBidAt: Map<string, number>;
   passedManagerIds: string[];
+  passwordSalt: string | null;
+  passwordHash: string | null;
 }
 
 const POSITIONS: Position[] = ["GK", "DEF", "MID", "FWD"];
@@ -64,6 +69,8 @@ const settingsSchema = z.object({
 const selectedIdsSchema = z.array(z.string().min(1)).max(80);
 const lineupSchema = z.array(z.object({ slotId: z.string().min(1), footballerId: z.string().min(1) })).min(6).max(11);
 const chatSchema = z.string().trim().min(1, "Write a message first.").max(300, "Messages can contain up to 300 characters.");
+const accessSchema = z.enum(["public", "password"]);
+const passwordSchema = z.string().trim().min(4, "Room passwords need at least four characters.").max(32, "Room passwords can contain up to 32 characters.").regex(/^[^\u0000-\u001f\u007f]+$/, "Room passwords cannot contain control characters.");
 
 const AVATARS = ["🦁", "🐺", "🦅", "🐉", "🦊", "🐯", "🦈", "⚡", "🔥", "👑", "🦂", "🦬", "🦏"];
 const BOT_NAMES = ["Bargain Hunter AI", "Aggressive Bidder AI", "Star Collector AI", "Balanced Manager AI", "Tactical Specialist AI", "Last-Second Sniper AI", "Value Scout AI", "Pressure Manager AI", "Elite Collector AI", "Formation Expert AI", "Counter Bidder AI", "Patient Sniper AI"];
@@ -75,8 +82,24 @@ export class RoomManager {
 
   constructor(
     private emitState: (code: string, state: RoomState) => void,
-    private emitReaction: (code: string, payload: { managerName: string; reaction: string; at: number }) => void
+    private emitReaction: (code: string, payload: { managerName: string; reaction: string; at: number }) => void,
+    private emitDirectoryChanged: () => void
   ) {}
+
+  private makePassword(password: string): { salt: string; hash: string } {
+    const parsed = passwordSchema.parse(password);
+    const salt = crypto.randomBytes(16);
+    const hash = crypto.scryptSync(parsed, salt, 32);
+    return { salt: salt.toString("hex"), hash: hash.toString("hex") };
+  }
+
+  private passwordMatches(room: InternalRoom, passwordInput?: string): boolean {
+    if (room.access !== "password" || !room.passwordSalt || !room.passwordHash) return true;
+    if (!passwordInput) return false;
+    const candidate = crypto.scryptSync(passwordInput.trim(), Buffer.from(room.passwordSalt, "hex"), 32);
+    const expected = Buffer.from(room.passwordHash, "hex");
+    return candidate.length === expected.length && crypto.timingSafeEqual(candidate, expected);
+  }
 
   private code(): string {
     for (let tries = 0; tries < 30; tries++) {
@@ -175,6 +198,9 @@ export class RoomManager {
       version: room.version,
       hostId: room.hostId,
       isSolo: room.isSolo,
+      access: room.access,
+      hasPassword: room.access === "password" && Boolean(room.passwordHash),
+      createdAt: room.createdAt,
       managers: room.managers.map(({ sessionId: _session, socketId: _socket, ...manager }) => manager),
       settings: room.settings,
       availableFootballers: room.phase === "lobby" ? FOOTBALLERS : [],
@@ -202,10 +228,12 @@ export class RoomManager {
     this.emitState(room.code, this.publicState(room));
   }
 
-  create(nameInput: string, sessionId: string, socketId: string, solo = false): { code: string; managerId: string } {
+  create(nameInput: string, sessionId: string, socketId: string, solo = false, accessInput: RoomAccess = "public", passwordInput?: string): { code: string; managerId: string } {
     const name = nameSchema.parse(nameInput);
     const code = this.code();
     const settings = structuredClone(DEFAULT_SETTINGS);
+    const access = solo ? "public" : accessSchema.parse(accessInput);
+    const password = access === "password" ? this.makePassword(passwordInput ?? "") : null;
     const host = this.manager(name, sessionId, socketId, true, false, settings.startingBudget, 0);
     const managers = [host];
     if (solo) {
@@ -220,6 +248,8 @@ export class RoomManager {
       version: 0,
       hostId: host.id,
       isSolo: solo,
+      access,
+      createdAt: Date.now(),
       managers,
       settings,
       selectedFootballerIds: this.autoSelect(settings.poolTargets),
@@ -243,10 +273,13 @@ export class RoomManager {
       unsoldCounts: new Map(),
       lastChatAt: new Map(),
       lastBidAt: new Map(),
-      passedManagerIds: []
+      passedManagerIds: [],
+      passwordSalt: password?.salt ?? null,
+      passwordHash: password?.hash ?? null
     };
     this.rooms.set(code, room);
     this.broadcast(room);
+    this.emitDirectoryChanged();
     return { code, managerId: host.id };
   }
 
@@ -272,18 +305,68 @@ export class RoomManager {
     };
   }
 
-  join(codeInput: string, nameInput: string, sessionId: string, socketId: string): { code: string; managerId: string } {
+  join(codeInput: string, nameInput: string, sessionId: string, socketId: string, passwordInput?: string): { code: string; managerId: string } {
     const code = codeInput.trim().toUpperCase();
     const room = this.get(code);
     if (room.isSolo) throw new Error("Solo Practice rooms cannot be joined.");
     if (room.phase !== "lobby") throw new Error("This match has already started.");
-    if (room.managers.length >= room.settings.managerLimit) throw new Error(`This room is full (${room.settings.managerLimit} squads).`);
+    if (room.managers.length >= room.settings.managerLimit) throw new Error(`Room full: ${room.managers.length}/${room.settings.managerLimit} managers have already joined.`);
+    if (!this.passwordMatches(room, passwordInput)) throw new Error("Incorrect room password.");
     const name = nameSchema.parse(nameInput);
     if (room.managers.some(manager => manager.name.toLowerCase() === name.toLowerCase())) throw new Error("That manager name is already used in this room.");
     const manager = this.manager(name, sessionId, socketId, false, false, room.settings.startingBudget, room.managers.length);
     room.managers.push(manager);
     this.broadcast(room);
+    this.emitDirectoryChanged();
     return { code, managerId: manager.id };
+  }
+
+
+  listRooms(filters: RoomDirectoryFilters = {}): RoomDirectoryEntry[] {
+    return [...this.rooms.values()]
+      .filter(room => !room.isSolo && room.phase === "lobby")
+      .filter(room => filters.managerLimit === undefined || room.settings.managerLimit === filters.managerLimit)
+      .filter(room => filters.pricingMode === undefined || room.settings.pricingMode === filters.pricingMode)
+      .filter(room => filters.access === undefined || room.access === filters.access)
+      .map(room => ({
+        code: room.code,
+        hostName: room.managers.find(manager => manager.id === room.hostId)?.name ?? "Host",
+        access: room.access,
+        hasPassword: room.access === "password" && Boolean(room.passwordHash),
+        managerCount: room.managers.length,
+        managerLimit: room.settings.managerLimit,
+        openSlots: Math.max(0, room.settings.managerLimit - room.managers.length),
+        pricingMode: room.settings.pricingMode,
+        squadSize: room.settings.squadSize,
+        auctionSeconds: room.settings.auctionSeconds,
+        createdAt: room.createdAt
+      }))
+      .sort((a, b) => Number(a.openSlots > 0) === Number(b.openSlots > 0) ? b.createdAt - a.createdAt : Number(b.openSlots > 0) - Number(a.openSlots > 0));
+  }
+
+  updateAccess(code: string, managerId: string, accessInput: RoomAccess, passwordInput?: string): void {
+    const room = this.get(code);
+    if (room.hostId !== managerId) throw new Error("Only the host can change room access.");
+    if (room.phase !== "lobby") throw new Error("Room access is locked after kickoff.");
+    if (room.isSolo) throw new Error("Solo Practice does not use public room access.");
+    const access = accessSchema.parse(accessInput);
+    let nextSalt = room.passwordSalt;
+    let nextHash = room.passwordHash;
+    if (access === "public") {
+      nextSalt = null;
+      nextHash = null;
+    } else if (passwordInput?.trim()) {
+      const password = this.makePassword(passwordInput);
+      nextSalt = password.salt;
+      nextHash = password.hash;
+    } else if (!nextHash || !nextSalt) {
+      throw new Error("Enter a password with at least four characters.");
+    }
+    room.access = access;
+    room.passwordSalt = nextSalt;
+    room.passwordHash = nextHash;
+    this.broadcast(room);
+    this.emitDirectoryChanged();
   }
 
   resume(codeInput: string, sessionId: string, socketId: string): { managerId: string } {
@@ -313,6 +396,7 @@ export class RoomManager {
       if (room.managers.length === 0) {
         this.clearTimers(room);
         this.rooms.delete(room.code);
+        this.emitDirectoryChanged();
         return;
       }
       if (room.hostId === manager.id) {
@@ -320,6 +404,7 @@ export class RoomManager {
         room.managers.forEach(item => { item.isHost = item.id === room.hostId; });
       }
       this.broadcast(room);
+      this.emitDirectoryChanged();
       return;
     }
 
@@ -377,6 +462,7 @@ export class RoomManager {
     this.syncSoloBots(room);
     room.managers.forEach(manager => { manager.budget = room.settings.startingBudget; });
     this.broadcast(room);
+    this.emitDirectoryChanged();
   }
 
   updatePlayerPool(code: string, managerId: string, selectedFootballerIds: string[]): void {
@@ -408,6 +494,7 @@ export class RoomManager {
     const requiredPlayers = room.managers.length * getMaximumSquadSize(room.settings.squadSize);
     const selected = room.selectedFootballerIds.map(id => FOOTBALLER_BY_ID.get(id)).filter((player): player is Footballer => !!player);
     room.phase = "auction";
+    this.emitDirectoryChanged();
     room.footballerPool = this.buildAuctionPool(selected, requiredPlayers, room.managers.length);
     room.totalRounds = room.footballerPool.length;
     room.roundIndex = 0;

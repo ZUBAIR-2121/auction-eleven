@@ -3,7 +3,7 @@ import type { RoomState } from "@auction-eleven/shared";
 import { FOOTBALLERS } from "../src/footballers.js";
 import { RoomManager } from "../src/roomManager.js";
 
-type UnsafeRoomManager = RoomManager & {
+type UnsafeRoomManager = {
   rooms: Map<string, {
     managers: Array<{
       id: string;
@@ -17,9 +17,9 @@ type UnsafeRoomManager = RoomManager & {
 describe("full squad room flow", () => {
   it("moves a completed solo auction into formation selection and final podium results", () => {
     let latest: RoomState | null = null;
-    const manager = new RoomManager((_code, state) => { latest = state; }, () => undefined);
+    const manager = new RoomManager((_code, state) => { latest = state; }, () => undefined, () => undefined);
     const created = manager.create("Tester", "session-test", "socket-test", true);
-    const unsafe = manager as UnsafeRoomManager;
+    const unsafe = manager as unknown as UnsafeRoomManager;
     const room = unsafe.rooms.get(created.code)!;
     const balancedSquad = [
       ...FOOTBALLERS.filter(player => player.position === "GK").slice(0, 2),
@@ -50,7 +50,7 @@ describe("full squad room flow", () => {
   });
 
   it("expands Solo Practice to the maximum 8-manager room capacity", () => {
-    const manager = new RoomManager(() => undefined, () => undefined);
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
     const created = manager.create("Host", "session-limit", "socket-limit", true);
     manager.updateSettings(created.code, created.managerId, { managerLimit: 8 });
     const state = manager.getState(created.code);
@@ -60,7 +60,7 @@ describe("full squad room flow", () => {
   });
 
   it("accepts every selectable squad size from 6 through 17", () => {
-    const manager = new RoomManager(() => undefined, () => undefined);
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
     const created = manager.create("Host", "session-size", "socket-size", true);
     for (const squadSize of [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17] as const) {
       manager.updateSettings(created.code, created.managerId, { squadSize });
@@ -69,7 +69,7 @@ describe("full squad room flow", () => {
   });
 
   it("stores validated real-time room chat and exposes typing state", () => {
-    const manager = new RoomManager(() => undefined, () => undefined);
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
     const created = manager.create("Chatter", "session-chat", "socket-chat", false);
     manager.sendChat(created.code, created.managerId, "Hello room ⚽");
     const state = manager.getState(created.code);
@@ -80,7 +80,7 @@ describe("full squad room flow", () => {
   });
 
   it("lets a manager return to the menu from a lobby and transfers host ownership", () => {
-    const manager = new RoomManager(() => undefined, () => undefined);
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
     const created = manager.create("Host", "session-host", "socket-host", false);
     const joined = manager.join(created.code, "Guest", "session-guest", "socket-guest");
     manager.leave(created.code, created.managerId);
@@ -94,9 +94,34 @@ describe("full squad room flow", () => {
   });
 
   it("allows the human manager to quit and destroy a Solo Practice room", () => {
-    const manager = new RoomManager(() => undefined, () => undefined);
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
     const created = manager.create("Quitter", "session-quit", "socket-quit", true);
     manager.quitSolo(created.code, created.managerId);
     expect(() => manager.getState(created.code)).toThrow(/room not found/i);
   });
+
+  it("lists open and password rooms without exposing passwords", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const open = manager.create("Open Host", "session-open", "socket-open", false, "public");
+    const locked = manager.create("Locked Host", "session-lock", "socket-lock", false, "password", "secret-26");
+
+    const allRooms = manager.listRooms();
+    expect(allRooms.map(room => room.code)).toEqual(expect.arrayContaining([open.code, locked.code]));
+    expect(allRooms.find(room => room.code === open.code)).toMatchObject({ access: "public", hasPassword: false, managerCount: 1 });
+    expect(allRooms.find(room => room.code === locked.code)).toMatchObject({ access: "password", hasPassword: true, managerCount: 1 });
+    expect(JSON.stringify(manager.getState(locked.code))).not.toContain("secret-26");
+    expect(manager.listRooms({ access: "password" })).toHaveLength(1);
+  });
+
+  it("requires the correct password and blocks joining a full room", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const created = manager.create("Host", "session-host-lock", "socket-host-lock", false, "password", "goal-2026");
+    manager.updateSettings(created.code, created.managerId, { managerLimit: 2 });
+
+    expect(() => manager.join(created.code, "Wrong", "session-wrong", "socket-wrong", "bad-pass")).toThrow(/incorrect room password/i);
+    manager.join(created.code, "Guest", "session-good", "socket-good", "goal-2026");
+    expect(manager.listRooms().find(room => room.code === created.code)).toMatchObject({ managerCount: 2, openSlots: 0 });
+    expect(() => manager.join(created.code, "Late", "session-late", "socket-late", "goal-2026")).toThrow(/room full/i);
+  });
+
 });

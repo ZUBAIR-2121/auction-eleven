@@ -37,8 +37,8 @@ describe("full squad room flow", () => {
     }
 
     unsafe.beginFormation(room);
-    expect(latest?.phase).toBe("formation");
-    const host = latest!.managers.find(participant => participant.isHost)!;
+    expect((latest as RoomState | null)?.phase).toBe("formation");
+    const host = (latest as unknown as RoomState).managers.find(participant => participant.isHost)!;
     expect(host.lineup).toHaveLength(11);
     expect(host.squad.length - host.lineup.length).toBe(6);
 
@@ -91,10 +91,10 @@ describe("full squad room flow", () => {
       }
       ids.forEach(id => manager.setReady(created.code, id, true));
       expect(() => manager.start(created.code, created.managerId)).not.toThrow();
-      expect(latest?.phase).toBe("auction");
-      expect(latest?.managers).toHaveLength(managerCount);
-      expect(latest?.settings.substituteCount).toBe(substitutes);
-      expect(new Set(latest?.managers.map(item => item.id)).size).toBe(managerCount);
+      expect((latest as RoomState | null)?.phase).toBe("auction");
+      expect((latest as RoomState | null)?.managers).toHaveLength(managerCount);
+      expect((latest as RoomState | null)?.settings.substituteCount).toBe(substitutes);
+      expect(new Set((latest as RoomState | null)?.managers.map(item => item.id) ?? []).size).toBe(managerCount);
     } finally {
       vi.clearAllTimers();
       vi.useRealTimers();
@@ -124,8 +124,8 @@ describe("full squad room flow", () => {
   it("explains impossible player-pool configurations before kickoff", () => {
     const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
     const created = manager.create("LimitHost", "session-limit-host", "socket-limit-host", true);
-    manager.updateSettings(created.code, created.managerId, { managerLimit: 8, squadSize: 11, substituteCount: 10 });
-    expect(() => manager.start(created.code, created.managerId)).toThrow(/requires 168 footballers.*only 96 eligible footballers/i);
+    manager.updateSettings(created.code, created.managerId, { managerLimit: 8, squadSize: 11, substituteCount: 10, playerPoolMode: "icons" });
+    expect(() => manager.start(created.code, created.managerId)).toThrow(/needs 168 unique players/i);
   });
 
   it("never repeats skipped footballers when re-auction is disabled", () => {
@@ -264,4 +264,91 @@ describe("full squad room flow", () => {
     expect(() => manager.join(created.code, "Late", "session-late", "socket-late", "goal-2026")).toThrow(/room full/i);
   });
 
+});
+
+describe("v1.6 player pools and private budgets", () => {
+  it("builds current-only, icon-only and generations pools from the server", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const created = manager.create("PoolHost", "session-pool-host", "socket-pool-host", false);
+
+    let state = manager.getState(created.code, created.managerId);
+    let selected = state.selectedFootballerIds.map(id => FOOTBALLERS.find(player => player.id === id)!);
+    expect(selected.length).toBeGreaterThan(0);
+    expect(selected.every(player => (player.playerType ?? "CURRENT") === "CURRENT")).toBe(true);
+
+    manager.updateSettings(created.code, created.managerId, { playerPoolMode: "icons" });
+    state = manager.getState(created.code, created.managerId);
+    selected = state.selectedFootballerIds.map(id => FOOTBALLERS.find(player => player.id === id)!);
+    expect(selected.length).toBeGreaterThan(0);
+    expect(selected.every(player => player.playerType === "ICON")).toBe(true);
+
+    manager.updateSettings(created.code, created.managerId, { playerPoolMode: "mixed", iconFrequency: "normal" });
+    state = manager.getState(created.code, created.managerId);
+    selected = state.selectedFootballerIds.map(id => FOOTBALLERS.find(player => player.id === id)!);
+    expect(selected.some(player => player.playerType === "ICON")).toBe(true);
+    expect(selected.some(player => (player.playerType ?? "CURRENT") === "CURRENT")).toBe(true);
+  });
+
+  it("custom mode uses only the host-selected footballers and rejects duplicate canonical identities", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const created = manager.create("CustomHost", "session-custom-host", "socket-custom-host", false);
+    manager.updateSettings(created.code, created.managerId, { playerPoolMode: "custom" });
+    const current = FOOTBALLERS.find(player => (player.playerType ?? "CURRENT") === "CURRENT")!;
+    const icon = FOOTBALLERS.find(player => player.playerType === "ICON")!;
+    manager.updatePlayerPool(created.code, created.managerId, [current.id, icon.id]);
+    const state = manager.getState(created.code, created.managerId);
+    expect(state.selectedFootballerIds).toEqual([current.id, icon.id]);
+    expect(state.poolValidation.selectedCurrent).toBe(1);
+    expect(state.poolValidation.selectedIcons).toBe(1);
+  });
+
+  it("never exposes an opponent's exact budget in lobby or active auction state", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const host = manager.create("PrivateHost", "session-private-host", "socket-private-host", false);
+      manager.updateSettings(host.code, host.managerId, { managerLimit: 2, squadSize: 6, substituteCount: 0 });
+      const guest = manager.join(host.code, "PrivateGuest", "session-private-guest", "socket-private-guest");
+
+      const hostLobby = manager.getState(host.code, host.managerId);
+      const guestLobby = manager.getState(host.code, guest.managerId);
+      expect(hostLobby.managers.find(item => item.id === host.managerId)?.budget).toBe(hostLobby.settings.startingBudget);
+      expect(hostLobby.managers.find(item => item.id === guest.managerId)?.budget).toBeNull();
+      expect(guestLobby.managers.find(item => item.id === guest.managerId)?.budget).toBe(guestLobby.settings.startingBudget);
+      expect(guestLobby.managers.find(item => item.id === host.managerId)?.budget).toBeNull();
+
+      manager.setReady(host.code, host.managerId, true);
+      manager.setReady(host.code, guest.managerId, true);
+      manager.start(host.code, host.managerId);
+      const hostAuction = manager.getState(host.code, host.managerId);
+      expect(hostAuction.phase).toBe("auction");
+      expect(hostAuction.managers.find(item => item.id === guest.managerId)?.budget).toBeNull();
+      expect(hostAuction.managers.find(item => item.id === host.managerId)?.budget).toBe(hostAuction.settings.startingBudget);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("filters public room discovery by player-pool mode", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const current = manager.create("CurrentHost", "session-current-directory", "socket-current-directory", false);
+    const icons = manager.create("IconHost", "session-icon-directory", "socket-icon-directory", false);
+    manager.updateSettings(icons.code, icons.managerId, { playerPoolMode: "icons" });
+    expect(manager.listRooms({ playerPoolMode: "current" }).map(room => room.code)).toContain(current.code);
+    expect(manager.listRooms({ playerPoolMode: "current" }).map(room => room.code)).not.toContain(icons.code);
+    expect(manager.listRooms({ playerPoolMode: "icons" }).map(room => room.code)).toContain(icons.code);
+  });
+
+  it("auto-builds extra auction variety while keeping the selected pool unique", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const host = manager.create("VarietyHost", "session-variety-host", "socket-variety-host", false);
+    manager.updateSettings(host.code, host.managerId, { managerLimit: 3, squadSize: 11, substituteCount: 5, playerPoolMode: "mixed" });
+    const state = manager.getState(host.code, host.managerId);
+    expect(state.poolValidation.required).toBe(48);
+    expect(state.poolValidation.recommended).toBeGreaterThan(48);
+    expect(state.poolValidation.selected).toBe(state.poolValidation.recommended);
+    expect(new Set(state.selectedFootballerIds).size).toBe(state.selectedFootballerIds.length);
+    expect(state.poolSelectionValid).toBe(true);
+  });
 });

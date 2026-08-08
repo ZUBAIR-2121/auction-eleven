@@ -3,7 +3,7 @@ import { FORMATIONS, getConfiguredSquadSize, getMinimumFootballersRequired, getO
 import { FOOTBALLERS } from "../src/footballers.js";
 import { buildAutomaticLineup, DEFAULT_SETTINGS, rankManagers, validateAndBuildLineup, validateBid } from "../src/gameEngine.js";
 
-const emptyManager: ManagerView = {
+const emptyManager: ManagerView & { budget: number } = {
   id: "m1",
   name: "Test",
   avatar: "🦁",
@@ -77,7 +77,7 @@ describe("validateBid", () => {
   it("rejects a stale auction", () => expect(validateBid({ amount: 1, currentBid: 0, manager: emptyManager, settings: DEFAULT_SETTINGS, auctionActive: false })).toMatch(/closed/i));
   it("rejects a mirrored copy already owned by the same manager", () => {
     const footballer = FOOTBALLERS[0]!;
-    const manager: ManagerView = { ...emptyManager, squad: [{ footballer, price: 1, round: 1 }] };
+    const manager: ManagerView & { budget: number } = { ...emptyManager, squad: [{ footballer, price: 1, round: 1 }] };
     const mirror = { ...footballer, id: `${footballer.id}-mirror`, catalogId: footballer.id };
     expect(validateBid({ amount: 1, currentBid: 0, manager, settings: DEFAULT_SETTINGS, auctionActive: true, footballer: mirror })).toMatch(/already own/i);
   });
@@ -124,7 +124,7 @@ describe("formations and lineup ranking", () => {
 
   it("returns a server-ranked result with formation metrics", () => {
     const automatic = buildAutomaticLineup(sampleSquad);
-    const manager: ManagerView = {
+    const manager: ManagerView & { budget: number } = {
       ...emptyManager,
       budget: 320,
       squad: sampleSquad,

@@ -6,6 +6,9 @@ export type SquadSize = 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
 export type BotDifficulty = "Amateur" | "Professional" | "World Class" | "Legendary";
 export type SubstituteCount = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
 export type PricingMode = "normal" | "ovr_scaled";
+export type PlayerType = "CURRENT" | "ICON";
+export type PlayerPoolMode = "current" | "icons" | "mixed" | "custom";
+export type IconFrequency = "low" | "normal" | "high";
 export type RoomAccess = "public" | "password";
 export const MAX_SUBSTITUTES = 10;
 /** The number of players placed on the pitch for the selected squad target. */
@@ -108,10 +111,14 @@ export const FORMATION_BY_ID = new Map(FORMATIONS.map(item => [item.id, item]));
 
 export interface Footballer {
   id: string;
+  /** Stable identity used to merge imports and prevent duplicate footballers. */
+  canonicalId?: string;
   /** Original catalogue id when this is a mirrored auction copy. */
   catalogId?: string;
   name: string;
   photoSearchName?: string;
+  /** CURRENT = active modern footballer, ICON = retired/legend footballer. */
+  playerType?: PlayerType;
   country: string;
   club: string;
   position: Position;
@@ -179,7 +186,8 @@ export interface ManagerView {
   id: string;
   name: string;
   avatar: string;
-  budget: number;
+  /** Exact during lobby for self only, hidden (null) for opponents in live phases, public again in final results. */
+  budget: number | null;
   ready: boolean;
   connected: boolean;
   isHost: boolean;
@@ -206,6 +214,9 @@ export interface GameSettings {
   minimumBid: number;
   bidIncrement: number;
   pricingMode: PricingMode;
+  playerPoolMode: PlayerPoolMode;
+  iconFrequency: IconFrequency;
+  iconSurprise: boolean;
   auctionSeconds: number;
   squadSize: SquadSize;
   substituteCount: SubstituteCount;
@@ -275,6 +286,19 @@ export interface ChatMessage {
   sentAt: number;
 }
 
+
+export interface PoolValidationSummary {
+  selected: number;
+  required: number;
+  recommended: number;
+  eligibleAvailable: number;
+  selectedCurrent: number;
+  selectedIcons: number;
+  missingByPosition: PoolTargets;
+  warnings: string[];
+  errors: string[];
+}
+
 export interface RoomDirectoryEntry {
   code: string;
   hostName: string;
@@ -284,6 +308,7 @@ export interface RoomDirectoryEntry {
   managerLimit: ManagerLimit;
   openSlots: number;
   pricingMode: PricingMode;
+  playerPoolMode: PlayerPoolMode;
   squadSize: SquadSize;
   substituteCount: SubstituteCount;
   auctionSeconds: number;
@@ -293,6 +318,7 @@ export interface RoomDirectoryEntry {
 export interface RoomDirectoryFilters {
   managerLimit?: ManagerLimit;
   pricingMode?: PricingMode;
+  playerPoolMode?: PlayerPoolMode;
   access?: RoomAccess;
 }
 
@@ -310,6 +336,7 @@ export interface RoomState {
   availableFootballers: Footballer[];
   selectedFootballerIds: string[];
   poolSelectionValid: boolean;
+  poolValidation: PoolValidationSummary;
   roundIndex: number;
   roundId: string;
   totalRounds: number;
@@ -348,6 +375,7 @@ export interface ClientToServerEvents {
   "room:ready": (payload: { code: string; ready: boolean }, ack: Ack<null>) => void;
   "room:updateSettings": (payload: { code: string; settings: Partial<GameSettings> }, ack: Ack<null>) => void;
   "room:updatePlayerPool": (payload: { code: string; selectedFootballerIds: string[] }, ack: Ack<null>) => void;
+  "room:autoBuildPlayerPool": (payload: { code: string }, ack: Ack<null>) => void;
   "game:start": (payload: { code: string }, ack: Ack<null>) => void;
   "game:quitSolo": (payload: { code: string }, ack: Ack<null>) => void;
   "auction:bid": (payload: { code: string; amount: number; requestId: string; roundId: string }, ack: Ack<null>) => void;

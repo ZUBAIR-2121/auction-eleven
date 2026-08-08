@@ -32,7 +32,7 @@ app.get("/api/footballers/:id/photo",async(req,res)=>{
 const server=http.createServer(app);
 const io=new Server<ClientToServerEvents,ServerToClientEvents>(server,{cors:{origin:CLIENT_ORIGIN,credentials:true},pingInterval:10000,pingTimeout:12000,maxHttpBufferSize:100_000});
 const rooms=new RoomManager(
-  (code,state)=>io.to(code).emit("room:state",state),
+  (socketId,state)=>io.to(socketId).emit("room:state",state),
   (code,payload)=>io.to(code).emit("room:reaction",payload),
   ()=>io.emit("rooms:changed"),
   (code,patch)=>io.to(code).emit("room:auctionPatch",patch)
@@ -55,16 +55,17 @@ io.on("connection",socket=>{
     rooms.assertSocketOwner(code,managerId,socket.id);
     return managerId;
   };
-  socket.on("room:create",(payload,ack)=>safeAck(ack,()=>{const result=rooms.create(payload.name,payload.sessionId,socket.id,!!payload.solo,payload.access,payload.password);managerId=result.managerId;roomCode=result.code;socket.join(result.code);socket.emit("room:state",rooms.getState(result.code));return result;}));
-  socket.on("room:join",(payload,ack)=>safeAck(ack,()=>{const result=rooms.join(payload.code,payload.name,payload.sessionId,socket.id,payload.password);managerId=result.managerId;roomCode=result.code;socket.join(result.code);socket.emit("room:state",rooms.getState(result.code));return result;}));
+  socket.on("room:create",(payload,ack)=>safeAck(ack,()=>{const result=rooms.create(payload.name,payload.sessionId,socket.id,!!payload.solo,payload.access,payload.password);managerId=result.managerId;roomCode=result.code;socket.join(result.code);socket.emit("room:state",rooms.getState(result.code,result.managerId));return result;}));
+  socket.on("room:join",(payload,ack)=>safeAck(ack,()=>{const result=rooms.join(payload.code,payload.name,payload.sessionId,socket.id,payload.password);managerId=result.managerId;roomCode=result.code;socket.join(result.code);socket.emit("room:state",rooms.getState(result.code,result.managerId));return result;}));
   socket.on("rooms:list",(payload,ack)=>safeAck(ack,()=>rooms.listRooms(payload.filters)));
-  socket.on("room:resume",(payload,ack)=>safeAck(ack,()=>{const result=rooms.resume(payload.code,payload.sessionId,socket.id);managerId=result.managerId;roomCode=payload.code.toUpperCase();socket.join(roomCode);socket.emit("room:state",rooms.getState(roomCode));return result;}));
+  socket.on("room:resume",(payload,ack)=>safeAck(ack,()=>{const result=rooms.resume(payload.code,payload.sessionId,socket.id);managerId=result.managerId;roomCode=payload.code.toUpperCase();socket.join(roomCode);socket.emit("room:state",rooms.getState(roomCode,result.managerId));return result;}));
   socket.on("room:leave",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.leave(payload.code,seat);socket.leave(payload.code.toUpperCase());managerId=null;roomCode=null;return null;}));
   socket.on("room:replaceWithAI",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.replaceWithAI(payload.code,seat,payload.managerId);return null;}));
   socket.on("room:ready",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.setReady(payload.code,seat,payload.ready);return null;}));
   socket.on("room:updateSettings",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.updateSettings(payload.code,seat,payload.settings);return null;}));
   socket.on("room:updateAccess",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.updateAccess(payload.code,seat,payload.access,payload.password);return null;}));
   socket.on("room:updatePlayerPool",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.updatePlayerPool(payload.code,seat,payload.selectedFootballerIds);return null;}));
+  socket.on("room:autoBuildPlayerPool",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.autoBuildPlayerPool(payload.code,seat);return null;}));
   socket.on("game:start",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.start(payload.code,seat);return null;}));
   socket.on("game:quitSolo",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.quitSolo(payload.code,seat);managerId=null;roomCode=null;return null;}));
   socket.on("auction:bid",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.bid(payload.code,seat,payload.amount,payload.requestId,payload.roundId);return null;}));

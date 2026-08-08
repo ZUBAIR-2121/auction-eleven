@@ -20,8 +20,10 @@ import {
   type FootballerPhoto,
   type FormationDefinition,
   type GameSettings,
+  type IconFrequency,
   type LineupRole,
   type ManagerLimit,
+  type PlayerPoolMode,
   type PoolTargets,
   type Position,
   type PricingMode,
@@ -66,6 +68,27 @@ const createSession = () => {
   return id;
 };
 const sessionId = createSession();
+const SAVED_MANAGER_NAME_KEY = "auction-eleven-manager-name";
+const MANAGER_NAME_PATTERN = /^[\p{L}\p{N} _-]{2,18}$/u;
+
+function normalizeManagerName(value: string): string {
+  return value.trim().replace(/\s+/g, " ").slice(0, 18);
+}
+
+function readSavedManagerName(): string {
+  try {
+    const saved = normalizeManagerName(localStorage.getItem(SAVED_MANAGER_NAME_KEY) ?? "");
+    return MANAGER_NAME_PATTERN.test(saved) ? saved : "";
+  } catch {
+    return "";
+  }
+}
+
+function rememberManagerName(value: string): void {
+  const normalized = normalizeManagerName(value);
+  if (!MANAGER_NAME_PATTERN.test(normalized)) return;
+  try { localStorage.setItem(SAVED_MANAGER_NAME_KEY, normalized); } catch { /* preferences can be unavailable */ }
+}
 
 type PerformancePreference = "auto" | "quality" | "performance";
 type EffectivePerformanceMode = "quality" | "performance";
@@ -585,7 +608,7 @@ function PlayerHeroSlider({ performanceMode }: { performanceMode: EffectivePerfo
 }
 
 function Landing({ socket, saveSeat, setError, performanceMode }: { socket: GameSocket; saveSeat: (code: string, id: string) => void; setError: (value: string) => void; performanceMode: EffectivePerformanceMode }) {
-  const [name, setName] = useState("");
+  const [name, setName] = useState(() => readSavedManagerName());
   const [code, setCode] = useState("");
   const [directPassword, setDirectPassword] = useState("");
   const [createAccess, setCreateAccess] = useState<RoomAccess>("public");
@@ -604,8 +627,9 @@ function Landing({ socket, saveSeat, setError, performanceMode }: { socket: Game
   }, [performanceMode]);
 
   const validateName = () => {
-    if (name.trim().length < 2) {
-      setError("Enter a manager name with at least two characters.");
+    const normalized = normalizeManagerName(name);
+    if (!MANAGER_NAME_PATTERN.test(normalized)) {
+      setError("Manager names must be 2–18 characters and use letters, numbers, spaces, - or _ only.");
       return false;
     }
     return true;
@@ -619,14 +643,17 @@ function Landing({ socket, saveSeat, setError, performanceMode }: { socket: Game
     }
     setBusy(true);
     socket.emit("room:create", {
-      name,
+      name: normalizeManagerName(name),
       sessionId,
       solo,
       access: solo ? "public" : createAccess,
       password: !solo && createAccess === "password" ? createPassword : undefined
     }, response => {
       setBusy(false);
-      response.ok ? saveSeat(response.data.code, response.data.managerId) : setError(response.error);
+      if (response.ok) {
+        rememberManagerName(name);
+        saveSeat(response.data.code, response.data.managerId);
+      } else setError(response.error);
     });
   };
 
@@ -637,9 +664,12 @@ function Landing({ socket, saveSeat, setError, performanceMode }: { socket: Game
       return;
     }
     setBusy(true);
-    socket.emit("room:join", { code, name, sessionId, password: directPassword || undefined }, response => {
+    socket.emit("room:join", { code, name: normalizeManagerName(name), sessionId, password: directPassword || undefined }, response => {
       setBusy(false);
-      response.ok ? saveSeat(response.data.code, response.data.managerId) : setError(response.error);
+      if (response.ok) {
+        rememberManagerName(name);
+        saveSeat(response.data.code, response.data.managerId);
+      } else setError(response.error);
     });
   };
 
@@ -661,7 +691,7 @@ function Landing({ socket, saveSeat, setError, performanceMode }: { socket: Game
       <div className="section-heading"><h2>Every screen built for <em>fast decisions.</em></h2><p>A responsive football-game interface designed for desktop, tablet, and mobile without forcing landscape orientation.</p></div>
       <div className="bento-grid">
         <article className="bento-card bento-wide"><span>01</span><h3>Create your lobby</h3><p>Launch an open room anyone can discover, or protect the room with a password while keeping it visible in the browser.</p><b>PUBLIC + PASSWORD ACCESS</b></article>
-        <article className="bento-card"><span>02</span><h3>Bid with context</h3><p>See opening value, squad needs, live rivals, remaining budget, and position coverage while every round is moving.</p><b>LIVE AUCTION INTELLIGENCE</b></article>
+        <article className="bento-card"><span>02</span><h3>Bid with context</h3><p>See opening value, squad needs, live rivals, private budgets, and position coverage while every round is moving.</p><b>LIVE AUCTION INTELLIGENCE</b></article>
         <article className="bento-card"><span>03</span><h3>Build the formation</h3><p>Drag starters and substitutes across the pitch on mouse or touch, then lock your tactical lineup for server scoring.</p><b>MOBILE DRAG SYSTEM</b></article>
       </div>
     </section>
@@ -698,6 +728,7 @@ function RoomDirectory({ socket, managerName, saveSeat, setError, onClose }: { s
   const closePasswordRoom = useBackClosable(Boolean(passwordRoom), () => setPasswordRoom(null), "room-password");
   const [managerLimit, setManagerLimit] = useState<"all" | ManagerLimit>("all");
   const [pricingMode, setPricingMode] = useState<"all" | PricingMode>("all");
+  const [playerPoolMode, setPlayerPoolMode] = useState<"all" | PlayerPoolMode>("all");
   const [access, setAccess] = useState<"all" | RoomAccess>("all");
 
   const loadRooms = React.useCallback(() => {
@@ -705,13 +736,14 @@ function RoomDirectory({ socket, managerName, saveSeat, setError, onClose }: { s
     const filters: RoomDirectoryFilters = {};
     if (managerLimit !== "all") filters.managerLimit = managerLimit;
     if (pricingMode !== "all") filters.pricingMode = pricingMode;
+    if (playerPoolMode !== "all") filters.playerPoolMode = playerPoolMode;
     if (access !== "all") filters.access = access;
     socket.emit("rooms:list", { filters }, response => {
       setLoading(false);
       if (!response.ok) setError(response.error);
       else setRooms(response.data);
     });
-  }, [access, managerLimit, pricingMode, setError, socket]);
+  }, [access, managerLimit, playerPoolMode, pricingMode, setError, socket]);
 
   useEffect(() => {
     loadRooms();
@@ -720,8 +752,9 @@ function RoomDirectory({ socket, managerName, saveSeat, setError, onClose }: { s
   }, [loadRooms, socket]);
 
   const join = (room: RoomDirectoryEntry, roomPassword?: string) => {
-    if (managerName.trim().length < 2) {
-      setError("Enter your manager name before joining a room.");
+    const normalizedManagerName = normalizeManagerName(managerName);
+    if (!MANAGER_NAME_PATTERN.test(normalizedManagerName)) {
+      setError("Enter a valid 2–18 character manager name before joining a room.");
       return;
     }
     if (room.openSlots < 1) {
@@ -734,10 +767,11 @@ function RoomDirectory({ socket, managerName, saveSeat, setError, onClose }: { s
       return;
     }
     setJoiningCode(room.code);
-    socket.emit("room:join", { code: room.code, name: managerName, sessionId, password: roomPassword }, response => {
+    socket.emit("room:join", { code: room.code, name: normalizedManagerName, sessionId, password: roomPassword }, response => {
       setJoiningCode("");
       if (!response.ok) setError(response.error);
       else {
+        rememberManagerName(normalizedManagerName);
         saveSeat(response.data.code, response.data.managerId);
       }
     });
@@ -749,6 +783,7 @@ function RoomDirectory({ socket, managerName, saveSeat, setError, onClose }: { s
       <div className="directory-filters">
         <label><span>ROOM SIZE</span><select value={managerLimit} onChange={event => setManagerLimit(event.target.value === "all" ? "all" : Number(event.target.value) as ManagerLimit)}><option value="all">All sizes</option>{MANAGER_LIMITS.map(limit => <option value={limit} key={limit}>{limit} managers</option>)}</select></label>
         <label><span>PRICING</span><select value={pricingMode} onChange={event => setPricingMode(event.target.value as "all" | PricingMode)}><option value="all">All modes</option><option value="normal">Normal pricing</option><option value="ovr_scaled">OVR pricing</option></select></label>
+        <label><span>PLAYER POOL</span><select value={playerPoolMode} onChange={event => setPlayerPoolMode(event.target.value as "all" | PlayerPoolMode)}><option value="all">All generations</option><option value="current">Current only</option><option value="icons">Icons only</option><option value="mixed">Generations</option><option value="custom">Custom</option></select></label>
         <label><span>ACCESS</span><select value={access} onChange={event => setAccess(event.target.value as "all" | RoomAccess)}><option value="all">All rooms</option><option value="public">Open rooms</option><option value="password">Password rooms</option></select></label>
         <button className="directory-refresh" onClick={loadRooms} disabled={loading}>↻ <span>REFRESH</span></button>
       </div>
@@ -760,7 +795,7 @@ function RoomDirectory({ socket, managerName, saveSeat, setError, onClose }: { s
           const full = room.openSlots < 1;
           return <article className={`directory-room ${full ? "full" : ""}`} key={room.code}>
             <div className="directory-room-icon">{room.hasPassword ? "◆" : "◎"}</div>
-            <div className="directory-room-main"><div><strong>{room.hostName}'s room</strong><span className={room.hasPassword ? "locked" : "open"}>{room.hasPassword ? "PASSWORD" : "OPEN"}</span></div><small>Code {room.code} · {getStartingLineupSize(room.squadSize)} starters + {room.substituteCount} subs · {room.auctionSeconds}s rounds</small><div className="directory-room-tags"><span>{room.pricingMode === "ovr_scaled" ? "OVR PRICING" : "NORMAL PRICING"}</span><span>{room.managerLimit} MANAGER ROOM</span></div></div>
+            <div className="directory-room-main"><div><strong>{room.hostName}'s room</strong><span className={room.hasPassword ? "locked" : "open"}>{room.hasPassword ? "PASSWORD" : "OPEN"}</span></div><small>Code {room.code} · {getStartingLineupSize(room.squadSize)} starters + {room.substituteCount} subs · {room.auctionSeconds}s rounds</small><div className="directory-room-tags"><span>{room.pricingMode === "ovr_scaled" ? "OVR PRICING" : "NORMAL PRICING"}</span><span>{room.playerPoolMode === "mixed" ? "GENERATIONS" : room.playerPoolMode === "icons" ? "ICONS" : room.playerPoolMode === "custom" ? "CUSTOM POOL" : "CURRENT"}</span><span>{room.managerLimit} MANAGER ROOM</span></div></div>
             <div className="directory-occupancy"><div><b>{room.managerCount}</b><span>/{room.managerLimit}</span></div><small>{full ? "ROOM FULL" : `${room.openSlots} OPEN`}</small></div>
             <button className="directory-join" disabled={full || joiningCode === room.code} onClick={() => join(room)}>{full ? "FULL" : joiningCode === room.code ? "JOINING…" : room.hasPassword ? "ENTER PASSWORD" : "JOIN ROOM"}</button>
           </article>;
@@ -789,46 +824,21 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
   const starterCount = getStartingLineupSize(state.settings.squadSize);
   const substituteCount = state.settings.substituteCount;
   const totalSquadSize = getConfiguredSquadSize(state.settings.squadSize, substituteCount);
-  const requiredPool = getMinimumFootballersRequired(state.managers.length, state.settings.squadSize, substituteCount);
-  const availablePool = state.selectedFootballerIds.length;
-  const poolEnough = availablePool >= requiredPool;
-  const requiredGoalkeepers = state.managers.length;
-  const requiredOutfield = state.managers.length * Math.max(0, starterCount - 1);
-  const availableOutfield = counts.DEF + counts.MID + counts.FWD;
-  const formationPoolEnough = counts.GK >= requiredGoalkeepers && availableOutfield >= requiredOutfield;
-  const poolValidationMessage = !poolEnough
-    ? `This setup needs ${requiredPool} footballers, but ${availablePool} are selected.`
-    : counts.GK < requiredGoalkeepers
-      ? `Select at least ${requiredGoalkeepers} goalkeepers so every manager can field one.`
-      : availableOutfield < requiredOutfield
-        ? `Select at least ${requiredOutfield} outfield footballers; only ${availableOutfield} are selected.`
-        : "";
-  const startDisabled = state.managers.some(manager => !manager.ready) || !state.poolSelectionValid || !poolEnough || !formationPoolEnough;
-  const changeNumber = (key: "startingBudget" | "auctionSeconds" | "formationSeconds", value: number) => {
-    const settings: Partial<GameSettings> = { [key]: value };
-    socket.emit("room:updateSettings", { code: state.code, settings }, response => { if (!response.ok) setError(response.error); });
-  };
-  const changeTarget = (position: Position, value: number) => {
-    socket.emit("room:updateSettings", { code: state.code, settings: { poolTargets: { ...state.settings.poolTargets, [position]: value } } }, response => { if (!response.ok) setError(response.error); });
-  };
-  const changeManagerLimit = (managerLimit: ManagerLimit) => {
-    socket.emit("room:updateSettings", { code: state.code, settings: { managerLimit } }, response => { if (!response.ok) setError(response.error); });
-  };
-  const changeSquadSize = (squadSize: SquadSize) => {
-    socket.emit("room:updateSettings", { code: state.code, settings: { squadSize } }, response => { if (!response.ok) setError(response.error); });
-  };
-  const changeSubstituteCount = (substituteCount: SubstituteCount) => {
-    socket.emit("room:updateSettings", { code: state.code, settings: { substituteCount } }, response => { if (!response.ok) setError(response.error); });
-  };
-  const changeReauctionUnsold = (reauctionUnsold: boolean) => {
-    socket.emit("room:updateSettings", { code: state.code, settings: { reauctionUnsold } }, response => { if (!response.ok) setError(response.error); });
-  };
-  const changeBotDifficulty = (botDifficulty: BotDifficulty) => {
-    socket.emit("room:updateSettings", { code: state.code, settings: { botDifficulty } }, response => { if (!response.ok) setError(response.error); });
-  };
-  const changePricingMode = (pricingMode: PricingMode) => {
-    socket.emit("room:updateSettings", { code: state.code, settings: { pricingMode } }, response => { if (!response.ok) setError(response.error); });
-  };
+  const validation = state.poolValidation;
+  const startDisabled = state.managers.some(manager => !manager.ready) || !state.poolSelectionValid;
+
+  const updateSettings = (settings: Partial<GameSettings>) => socket.emit("room:updateSettings", { code: state.code, settings }, response => { if (!response.ok) setError(response.error); });
+  const changeNumber = (key: "startingBudget" | "auctionSeconds" | "formationSeconds", value: number) => updateSettings({ [key]: value });
+  const changeManagerLimit = (managerLimit: ManagerLimit) => updateSettings({ managerLimit });
+  const changeSquadSize = (squadSize: SquadSize) => updateSettings({ squadSize });
+  const changeSubstituteCount = (next: SubstituteCount) => updateSettings({ substituteCount: next });
+  const changeReauctionUnsold = (reauctionUnsold: boolean) => updateSettings({ reauctionUnsold });
+  const changeBotDifficulty = (botDifficulty: BotDifficulty) => updateSettings({ botDifficulty });
+  const changePricingMode = (pricingMode: PricingMode) => updateSettings({ pricingMode });
+  const changePlayerPoolMode = (playerPoolMode: PlayerPoolMode) => updateSettings({ playerPoolMode });
+  const changeIconFrequency = (iconFrequency: IconFrequency) => updateSettings({ iconFrequency });
+  const changeIconSurprise = (iconSurprise: boolean) => updateSettings({ iconSurprise });
+  const autoBuildPool = () => socket.emit("room:autoBuildPlayerPool", { code: state.code }, response => { if (!response.ok) setError(response.error); });
   const changeRoomAccess = (access: RoomAccess) => {
     if (access === "password" && !state.hasPassword && roomPassword.trim().length < 4) {
       setError("Enter a room password with at least four characters first.");
@@ -841,6 +851,7 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
   };
   const toggleReady = () => socket.emit("room:ready", { code: state.code, ready: !me.ready }, response => { if (!response.ok) setError(response.error); });
   const start = () => socket.emit("game:start", { code: state.code }, response => { if (!response.ok) setError(response.error); });
+  const poolModeLabel = state.settings.playerPoolMode === "mixed" ? "GENERATIONS" : state.settings.playerPoolMode === "icons" ? "ICONS" : state.settings.playerPoolMode === "custom" ? "CUSTOM" : "CURRENT";
 
   return <main className="lobby page">
     <div className="room-return-row"><button className="room-back-button" onClick={leave}><span>←</span><div><b>BACK TO GAME MENU</b><small>Leave this room safely</small></div></button></div>
@@ -852,18 +863,29 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
         <Setting label="Formation time limit" value={`${Math.round(state.settings.formationSeconds / 60)} min`}><input disabled={!isHost} type="range" min="120" max="600" step="60" value={state.settings.formationSeconds} onChange={event => changeNumber("formationSeconds", +event.target.value)} /></Setting>
         {!state.isSolo && <div className="manager-limit-setting room-access-setting"><div><span>ROOM ACCESS</span><b>{state.access === "password" ? "PASSWORD" : "OPEN"}</b></div><div className="preset-buttons pricing-mode-buttons"><button disabled={!isHost} className={state.access === "public" ? "active" : ""} onClick={() => changeRoomAccess("public")}><strong>Open room</strong><small>Visible in Find Room and joins instantly.</small></button><button disabled={!isHost} className={state.access === "password" ? "active" : ""} onClick={() => changeRoomAccess("password")}><strong>Password room</strong><small>Visible in Find Room but locked.</small></button></div>{isHost && <div className="lobby-password-row"><input type="password" maxLength={32} value={roomPassword} onChange={event => setRoomPassword(event.target.value)} placeholder={state.hasPassword ? "Enter a new password to replace it" : "Set password (4–32 characters)"} /><button disabled={roomPassword.trim().length < 4} onClick={() => changeRoomAccess("password")}>{state.hasPassword ? "UPDATE PASSWORD" : "SET PASSWORD"}</button></div>}<small>{state.hasPassword ? "A password is active. It is never sent to other players or shown in the room directory." : "Open rooms can be joined without a password."}</small></div>}
         <div className="manager-limit-setting pricing-mode-setting"><div><span>PLAYER STARTING PRICES</span><b>{state.settings.pricingMode === "ovr_scaled" ? "OVR PRICING" : "NORMAL"}</b></div><div className="preset-buttons pricing-mode-buttons">{PRICING_MODES.map(mode => <button disabled={!isHost} className={state.settings.pricingMode === mode.id ? "active" : ""} onClick={() => changePricingMode(mode.id)} key={mode.id}><strong>{mode.title}</strong><small>{mode.description}</small></button>)}</div><small>{state.settings.pricingMode === "ovr_scaled" ? "The opening bid uses each player's OVR and market value, scaled to the room budget." : "Classic mode keeps the same opening bid for every footballer."}</small></div>
-        <div className="manager-limit-setting difficulty-setting"><div><span>AI DIFFICULTY</span><b>{state.settings.botDifficulty.toUpperCase()}</b></div><div className="preset-buttons difficulty-buttons">{BOT_DIFFICULTIES.map(level => <button disabled={!isHost || !state.isSolo} className={state.settings.botDifficulty === level ? "active" : ""} onClick={() => changeBotDifficulty(level)} key={level}>{level}</button>)}</div><small>{state.isSolo ? "Higher levels value positional needs, budget timing and late-round bidding more accurately." : "AI difficulty is used in Solo Practice rooms."}</small></div>
+
+        <div className="manager-limit-setting player-pool-setting"><div><span>PLAYER POOL</span><b>{poolModeLabel}</b></div><div className="player-pool-mode-grid">
+          <button disabled={!isHost} className={state.settings.playerPoolMode === "current" ? "active" : ""} onClick={() => changePlayerPoolMode("current")}><span>NOW</span><strong>Current</strong><small>Modern stars only</small></button>
+          <button disabled={!isHost} className={state.settings.playerPoolMode === "icons" ? "active icon" : "icon"} onClick={() => changePlayerPoolMode("icons")}><span>★</span><strong>Icons</strong><small>Legendary retired footballers</small></button>
+          <button disabled={!isHost} className={state.settings.playerPoolMode === "mixed" ? "active" : ""} onClick={() => changePlayerPoolMode("mixed")}><span>∞</span><strong>Generations</strong><small>Modern stars vs legends</small></button>
+          <button disabled={!isHost} className={state.settings.playerPoolMode === "custom" ? "active" : ""} onClick={() => changePlayerPoolMode("custom")}><span>＋</span><strong>Custom</strong><small>Build your own pool</small></button>
+        </div>
+        {state.settings.playerPoolMode === "mixed" && <div className="mixed-options"><div><span>ICON FREQUENCY</span><div className="inline-choice">{(["low", "normal", "high"] as IconFrequency[]).map(value => <button disabled={!isHost} className={state.settings.iconFrequency === value ? "active" : ""} onClick={() => changeIconFrequency(value)} key={value}>{value.toUpperCase()}</button>)}</div></div><div><span>ICON SURPRISE</span><div className="inline-choice"><button disabled={!isHost} className={!state.settings.iconSurprise ? "active" : ""} onClick={() => changeIconSurprise(false)}>OFF</button><button disabled={!isHost} className={state.settings.iconSurprise ? "active icon" : "icon"} onClick={() => changeIconSurprise(true)}>ON</button></div></div><small>Low ≈20% icons · Normal ≈35% · High ≈50%. Surprise mode spaces icons between current-player runs.</small></div>}
+        </div>
+
+        <div className="manager-limit-setting difficulty-setting"><div><span>AI DIFFICULTY</span><b>{state.settings.botDifficulty.toUpperCase()}</b></div><div className="preset-buttons difficulty-buttons">{BOT_DIFFICULTIES.map(level => <button disabled={!isHost || !state.isSolo} className={state.settings.botDifficulty === level ? "active" : ""} onClick={() => changeBotDifficulty(level)} key={level}>{level}</button>)}</div><small>{state.isSolo ? "Higher levels value OVR, player type, positional needs and budget timing more accurately." : "AI difficulty is used in Solo Practice rooms."}</small></div>
         <div className="manager-limit-setting"><div><span>ROOM CAPACITY</span><b>{state.settings.managerLimit} MANAGERS</b></div><div className="preset-buttons compact-presets">{MANAGER_LIMITS.map(limit => <button disabled={!isHost || (!state.isSolo && limit < state.managers.length)} className={state.settings.managerLimit === limit ? "active" : ""} onClick={() => changeManagerLimit(limit)} key={limit}>{limit}</button>)}</div><small>{state.isSolo ? "AI managers are added automatically." : "Rooms support a minimum of 2 and maximum of 8 managers."}</small></div>
         <div className="manager-limit-setting squad-size-setting"><div><span>STARTERS</span><b>{starterCount} PLAYERS</b></div><div className="preset-buttons squad-size-buttons">{SQUAD_SIZES.map(size => <button disabled={!isHost} className={state.settings.squadSize === size ? "active" : ""} onClick={() => changeSquadSize(size)} key={size}>{size}</button>)}</div><small>Choose the starting formation size. Full-size football uses 11 starters.</small></div>
         <div className="manager-limit-setting substitute-setting"><div><span>SUBSTITUTES</span><b>{substituteCount} SUB{substituteCount === 1 ? "" : "S"}</b></div><div className="preset-buttons substitute-buttons">{SUBSTITUTE_COUNTS.map(count => <button disabled={!isHost} className={substituteCount === count ? "active" : ""} onClick={() => changeSubstituteCount(count)} key={count}>{count}</button>)}</div><small>Total squad size is {totalSquadSize} per manager.</small></div>
         <div className="manager-limit-setting reauction-setting"><div><span>RE-AUCTION UNSOLD</span><b>{state.settings.reauctionUnsold ? "ON" : "OFF"}</b></div><div className="preset-buttons pricing-mode-buttons"><button disabled={!isHost} className={!state.settings.reauctionUnsold ? "active" : ""} onClick={() => changeReauctionUnsold(false)}><strong>Off</strong><small>Skipped footballers never return.</small></button><button disabled={!isHost} className={state.settings.reauctionUnsold ? "active" : ""} onClick={() => changeReauctionUnsold(true)}><strong>On</strong><small>Unsold players return only after the normal pool ends.</small></button></div></div>
-        <div className="pool-target-settings"><div className="setting-heading"><span>ROOM PLAYER QUOTAS</span><b>15–24 PER POSITION</b></div>{POSITIONS.map(position => <label key={position}><span>{position}</span><input disabled={!isHost} type="range" min="15" max="24" value={state.settings.poolTargets[position]} onChange={event => changeTarget(position, +event.target.value)} /><b>{state.settings.poolTargets[position]}</b></label>)}</div>
-        <div className={`pool-summary ${state.poolSelectionValid ? "valid" : "invalid"}`}><div><span>SELECTED ROOM POOL</span><strong>{state.selectedFootballerIds.length} footballers</strong></div><div className="pool-counts">{POSITIONS.map(position => <span key={position}>{position} <b>{counts[position]}/{state.settings.poolTargets[position]}</b></span>)}</div><button onClick={() => setPoolOpen(true)}>{isHost ? "SELECT PLAYERS" : "VIEW PLAYERS"}</button></div>
-        <div className={`capacity-meter ${poolEnough ? "unique" : "mirrored"}`}><span>{poolEnough ? "Auction pool ready" : "More footballers required"}</span><b>{availablePool} selected / {requiredPool} minimum</b><small>{state.managers.length} manager{state.managers.length === 1 ? "" : "s"} × ({starterCount} starters + {substituteCount} subs) = {requiredPool} minimum footballers. Every selected footballer appears at most once unless re-auction is enabled.</small></div>
+
+        <div className={`pool-summary ${state.poolSelectionValid ? "valid" : "invalid"}`}><div><span>SELECTED AUCTION POOL</span><strong>{validation.selected} / {validation.required} minimum</strong></div><div className="pool-type-counts"><span>CURRENT <b>{validation.selectedCurrent}</b></span><span>ICONS <b>{validation.selectedIcons}</b></span><span>RECOMMENDED <b>{validation.recommended}</b></span><span>AVAILABLE <b>{validation.eligibleAvailable}</b></span></div><div className="pool-counts">{POSITIONS.map(position => <span key={position}>{position} <b>{counts[position]}</b></span>)}</div><div className="pool-actions"><button onClick={() => setPoolOpen(true)}>{isHost && state.settings.playerPoolMode === "custom" ? "CUSTOMIZE PLAYERS" : "VIEW PLAYERS"}</button>{isHost && <button className="auto-pool" onClick={autoBuildPool}>{state.settings.playerPoolMode === "custom" ? "RANDOM BALANCED" : "REBUILD BALANCED POOL"}</button>}</div></div>
+
+        <div className="prematch-summary"><div className="setting-heading"><span>AUCTION SETTINGS</span><b>READY CHECK</b></div><div className="summary-grid"><span>Managers<b>{state.managers.length}</b></span><span>Starters<b>{starterCount}</b></span><span>Subs<b>{substituteCount}</b></span><span>Squad<b>{totalSquadSize}</b></span><span>Player pool<b>{poolModeLabel}</b></span><span>Selected<b>{validation.selected}</b></span><span>Minimum<b>{validation.required}</b></span><span>Recommended<b>{validation.recommended}</b></span><span>Timer<b>{state.settings.auctionSeconds}s</b></span><span>Budget<b>{state.settings.startingBudget}M</b></span><span>Opponent budgets<b>PRIVATE</b></span>{state.settings.playerPoolMode === "mixed" && <span>Icons<b>{state.settings.iconFrequency.toUpperCase()}</b></span>}</div></div>
+
+        {(validation.errors.length > 0 || validation.warnings.length > 0) && <div className="pool-validation-list">{validation.errors.map(message => <p className="error" key={message}>✕ {message}</p>)}{validation.warnings.map(message => <p className="warning" key={message}>! {message}</p>)}</div>}
+        <div className="capacity-meter unique"><span>{state.poolSelectionValid ? "Auction pool ready" : "Player pool needs attention"}</span><b>{validation.selected} selected / {validation.required} minimum</b><small>{state.managers.length} manager{state.managers.length === 1 ? "" : "s"} × ({starterCount} starters + {substituteCount} subs) = {validation.required} minimum unique footballers. The recommended pool adds variety while preserving positional coverage.</small></div>
         <div className="lobby-actions"><button className={me.ready ? "secondary" : "primary"} onClick={toggleReady}>{me.ready ? "Not Ready" : "I’m Ready"}</button>{isHost && <button className="kickoff" disabled={startDisabled} onClick={start}>START AUCTION ↗</button>}<button className="text-btn" onClick={leave}>← Back to menu</button></div>
-        {!state.poolSelectionValid && <p className="setup-warning">Complete every position quota before starting.</p>}
-        {state.poolSelectionValid && poolValidationMessage && <p className="setup-warning">{poolValidationMessage} Adjust substitutes, starters, manager count, or the player pool before kickoff.</p>}
-        {state.poolSelectionValid && !poolEnough && <p className="setup-warning">This setup needs {requiredPool} footballers, but only {availablePool} are selected. Reduce substitutes/managers or increase the player pool.</p>}
       </section></div>
     {poolOpen && <PlayerPoolModal socket={socket} state={state} isHost={isHost} onClose={closePool} setError={setError} />}
   </main>;
@@ -872,51 +894,77 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
 function Setting({ label, value, children }: { label: string; value: string; children: React.ReactNode }) { return <div className="setting"><div><span>{label}</span><b>{value}</b></div>{children}</div>; }
 
 function PlayerPoolModal({ socket, state, isHost, onClose, setError }: { socket: GameSocket; state: RoomState; isHost: boolean; onClose: () => void; setError: (value: string) => void }) {
-  const [active, setActive] = useState<Position>("GK");
+  const [active, setActive] = useState<"ALL" | Position>("ALL");
+  const [typeFilter, setTypeFilter] = useState<"ALL" | "CURRENT" | "ICON">("ALL");
+  const [roleFilter, setRoleFilter] = useState<"ALL" | LineupRole>("ALL");
+  const [minOvr, setMinOvr] = useState(70);
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState<string[]>(state.selectedFootballerIds);
   const [saving, setSaving] = useState(false);
+  const editable = isHost && state.settings.playerPoolMode === "custom";
+  const roles: LineupRole[] = ["GK", "LB", "CB", "RB", "LWB", "RWB", "CDM", "CM", "CAM", "LM", "RM", "LW", "RW", "CF", "ST"];
+
+  useEffect(() => { setDraft(state.selectedFootballerIds); }, [state.selectedFootballerIds]);
   const counts = useMemo(() => countPool(state.availableFootballers, draft), [state.availableFootballers, draft]);
   const selectedSet = useMemo(() => new Set(draft), [draft]);
-  const visible = useMemo(() => state.availableFootballers.filter(player => player.position === active && (`${player.name} ${player.country}`).toLowerCase().includes(query.toLowerCase())).sort((a, b) => b.overall - a.overall), [state.availableFootballers, active, query]);
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const visible = useMemo(() => state.availableFootballers
+    .filter(player => active === "ALL" || player.position === active)
+    .filter(player => typeFilter === "ALL" || (player.playerType ?? "CURRENT") === typeFilter)
+    .filter(player => roleFilter === "ALL" || getFootballerRoles(player).includes(roleFilter))
+    .filter(player => player.overall >= minOvr)
+    .filter(player => !normalizedQuery || `${player.name} ${player.country} ${player.club} ${getFootballerRoles(player).join(" ")}`.toLocaleLowerCase().includes(normalizedQuery))
+    .sort((a, b) => b.overall - a.overall || a.name.localeCompare(b.name)), [state.availableFootballers, active, typeFilter, roleFilter, minOvr, normalizedQuery]);
+
   const toggle = (player: Footballer) => {
-    if (!isHost) return;
-    setDraft(current => {
-      if (current.includes(player.id)) return current.filter(id => id !== player.id);
-      if (counts[player.position] >= state.settings.poolTargets[player.position]) return current;
-      return [...current, player.id];
-    });
+    if (!editable) return;
+    setDraft(current => current.includes(player.id) ? current.filter(id => id !== player.id) : [...current, player.id]);
   };
-  const autoFill = (all: boolean) => {
+  const addType = (playerType: "CURRENT" | "ICON") => {
+    if (!editable) return;
+    const ids = state.availableFootballers.filter(player => (player.playerType ?? "CURRENT") === playerType).map(player => player.id);
+    setDraft(current => [...new Set([...current, ...ids])]);
+  };
+  const autoBuild = () => {
     if (!isHost) return;
-    setDraft(current => {
-      let next = all ? [] : [...current];
-      const targets = all ? POSITIONS : [active];
-      for (const position of targets) {
-        next = next.filter(id => state.availableFootballers.find(player => player.id === id)?.position !== position);
-        const candidates = state.availableFootballers.filter(player => player.position === position).sort(() => Math.random() - .5).slice(0, state.settings.poolTargets[position]);
-        next.push(...candidates.map(player => player.id));
-      }
-      return [...new Set(next)];
+    setSaving(true);
+    socket.emit("room:autoBuildPlayerPool", { code: state.code }, response => {
+      setSaving(false);
+      if (!response.ok) setError(response.error);
     });
   };
   const save = () => {
+    if (!editable) { onClose(); return; }
     setSaving(true);
     socket.emit("room:updatePlayerPool", { code: state.code, selectedFootballerIds: draft }, response => {
       setSaving(false);
       if (!response.ok) setError(response.error); else onClose();
     });
   };
-  const complete = POSITIONS.every(position => counts[position] === state.settings.poolTargets[position]);
-  return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Select room footballers"><section className="pool-modal"><header><div><div className="eyebrow">HOST PLAYER DRAFT</div><h2>Select this room’s footballers</h2><p>Choose exactly 15–24 footballers from every broad position.</p></div><button className="modal-close" onClick={onClose}>×</button></header><div className="pool-toolbar"><div className="position-tabs">{POSITIONS.map(position => <button className={active === position ? "active" : ""} key={position} onClick={() => setActive(position)}><span>{position}</span><b>{counts[position]}/{state.settings.poolTargets[position]}</b></button>)}</div><input value={query} onChange={event => setQuery(event.target.value)} placeholder={`Search ${POSITION_NAMES[active].toLowerCase()}…`} /><button disabled={!isHost} onClick={() => autoFill(false)}>Auto fill {active}</button><button disabled={!isHost} onClick={() => autoFill(true)}>Auto fill all</button></div><div className="pool-grid">{visible.map(player => {
-    const selected = selectedSet.has(player.id);
-    const full = !selected && counts[player.position] >= state.settings.poolTargets[player.position];
-    return <button type="button" disabled={!isHost || full} onClick={() => toggle(player)} className={`pool-player ${selected ? "selected" : ""}`} key={player.id}><FootballerPhoto player={player} compact /><span className="selection-mark">{selected ? "✓" : "+"}</span><div><strong>{player.name}</strong><small>{player.country} • {player.position}</small><span>OVR {player.overall} • Opens {money(getOpeningBid(state.settings, player))}</span></div></button>;
-  })}</div><footer><div className={complete ? "complete" : "incomplete"}>{complete ? `✓ Player pool complete · ${draft.length} selected` : "Select the missing players before saving"}</div><div><button className="secondary" onClick={onClose}>Cancel</button>{isHost && <button className="primary" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save room pool"}</button>}</div></footer></section></div>;
+  const selectedCurrent = state.availableFootballers.filter(player => selectedSet.has(player.id) && (player.playerType ?? "CURRENT") === "CURRENT").length;
+  const selectedIcons = state.availableFootballers.filter(player => selectedSet.has(player.id) && player.playerType === "ICON").length;
+  const required = getMinimumFootballersRequired(state.managers.length, state.settings.squadSize, state.settings.substituteCount);
+
+  return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Select room footballers"><section className="pool-modal expanded-pool-modal"><header><div><div className="eyebrow">{editable ? "CUSTOM PLAYER DRAFT" : "PLAYER DATABASE"}</div><h2>{editable ? "Build your auction pool" : "Explore this room’s pool"}</h2><p>{editable ? "Combine current stars and football icons. The server checks uniqueness and positional balance before kickoff." : "Search the catalogue and inspect every eligible footballer. Switch the room to Custom to edit the selection."}</p></div><button className="modal-close" onClick={onClose}>×</button></header>
+    <div className="pool-library-summary"><span>SELECTED <b>{draft.length}</b></span><span>REQUIRED <b>{required}</b></span><span>CURRENT <b>{selectedCurrent}</b></span><span>ICONS <b>{selectedIcons}</b></span><span>SHOWING <b>{visible.length}</b></span></div>
+    <div className="custom-pool-tools">
+      <div className="position-tabs all-position-tabs"><button className={active === "ALL" ? "active" : ""} onClick={() => setActive("ALL")}><span>ALL</span><b>{draft.length}</b></button>{POSITIONS.map(position => <button className={active === position ? "active" : ""} key={position} onClick={() => setActive(position)}><span>{position}</span><b>{counts[position]}</b></button>)}</div>
+      <input className="pool-search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search player, country, club or position…" />
+      <div className="pool-filter-row"><label><span>TYPE</span><select value={typeFilter} onChange={event => setTypeFilter(event.target.value as "ALL" | "CURRENT" | "ICON")}><option value="ALL">Current + Icons</option><option value="CURRENT">Current</option><option value="ICON">Icons</option></select></label><label><span>ROLE</span><select value={roleFilter} onChange={event => setRoleFilter(event.target.value as "ALL" | LineupRole)}><option value="ALL">All roles</option>{roles.map(role => <option value={role} key={role}>{role}</option>)}</select></label><label><span>MIN OVR · {minOvr}</span><input type="range" min="70" max="99" value={minOvr} onChange={event => setMinOvr(+event.target.value)} /></label></div>
+      {isHost && <div className="custom-pool-actions"><button disabled={!editable || saving} onClick={() => addType("CURRENT")}>Select All Current</button><button disabled={!editable || saving} className="icon-action" onClick={() => addType("ICON")}>Select All Icons</button><button disabled={!editable || saving} onClick={() => setDraft([])}>Clear Selection</button><button disabled={saving} onClick={autoBuild}>Random Balanced Selection</button></div>}
+    </div>
+    <div className="pool-grid custom-pool-grid">{visible.map(player => {
+      const selected = selectedSet.has(player.id);
+      const type = player.playerType ?? "CURRENT";
+      const playerRoles = getFootballerRoles(player);
+      return <button type="button" disabled={!editable} onClick={() => toggle(player)} className={`pool-player ${selected ? "selected" : ""} ${type === "ICON" ? "icon-player" : ""}`} key={player.id}><FootballerPhoto player={player} compact /><span className="selection-mark">{selected ? "✓" : editable ? "+" : "·"}</span><div><div className="pool-player-heading"><strong>{player.name}</strong><span className={`player-type-chip ${type === "ICON" ? "icon" : "current"}`}>{type}</span></div><small>{player.country} • {playerRoles[0] ?? player.position}{playerRoles.length > 1 ? ` • +${playerRoles.length - 1} roles` : ""}</small><span>OVR {player.overall} • Opens {money(getOpeningBid(state.settings, player))}</span></div></button>;
+    })}</div>
+    <footer><div className={draft.length >= required ? "complete" : "incomplete"}>{draft.length >= required ? `✓ ${draft.length} selected · server will verify positional balance` : `Add at least ${required - draft.length} more footballer${required - draft.length === 1 ? "" : "s"}`}</div><div><button className="secondary" onClick={onClose}>Cancel</button>{isHost && <button className="primary" disabled={saving || (editable && draft.length === 0)} onClick={save}>{saving ? "Saving…" : editable ? "Save custom pool" : "Done"}</button>}</div></footer>
+  </section></div>;
 }
 
 function FootballerPhoto({ player, compact = false }: { player: Footballer; compact?: boolean }) {
-  const cacheKey = player.catalogId ?? player.id;
+  const cacheKey = player.canonicalId ?? player.catalogId ?? player.id;
   const containerRef = useRef<HTMLDivElement>(null);
   const [photo, setPhoto] = useState<FootballerPhoto | undefined>(() => photoCache.get(cacheKey));
   const [failed, setFailed] = useState(false);
@@ -972,7 +1020,15 @@ const FormationClock = React.memo(function FormationClock({ endsAt }: { endsAt: 
   return <div className="formation-clock"><span>LINEUP DEADLINE</span><b>{Math.floor(seconds / 60)}:{String(Math.ceil(seconds % 60)).padStart(2, "0")}</b></div>;
 });
 
-const PlayerCard = React.memo(function PlayerCard({ player }: { player: Footballer }) { const roles = getFootballerRoles(player); return <motion.div key={player.id} initial={{ opacity: 0, scale: .94, y: 24 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: .45, ease: [0.22, 1, 0.36, 1] }} className={`player-card rarity-${player.rarity.toLowerCase()}`}><div className="card-top"><span>{player.rarity}</span><b>{roles[0] ?? player.position}</b></div><div className="rating">{player.overall}</div><FootballerPhoto player={player} /><h2>{player.name}</h2><p>{player.country} · Real footballer</p><div className="player-roles" aria-label="Playable positions">{roles.map((role, index) => <span className={index === 0 ? "primary" : ""} key={role}>{role}</span>)}</div><div className="stats"><Stat value={player.pace} label="PAC" /><Stat value={player.shooting} label="SHO" /><Stat value={player.passing} label="PAS" /><Stat value={player.dribbling} label="DRI" /><Stat value={player.defending} label="DEF" /><Stat value={player.physical} label="PHY" /></div><div className="trait">✦ {player.trait}</div></motion.div>; });
+const PlayerCard = React.memo(function PlayerCard({ player, iconSurprise = false }: { player: Footballer; iconSurprise?: boolean }) {
+  const roles = getFootballerRoles(player);
+  const type = player.playerType ?? "CURRENT";
+  return <motion.div key={player.id} initial={{ opacity: 0, scale: .94, y: 24 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: .45, ease: [0.22, 1, 0.36, 1] }} className={`player-card rarity-${player.rarity.toLowerCase()} ${type === "ICON" ? "player-type-icon" : "player-type-current"}`}>
+    {type === "ICON" && iconSurprise && <div className="icon-surprise-banner">★ ICON ENTERS THE AUCTION</div>}
+    <div className="card-top"><span>{type === "ICON" ? "ICON" : player.rarity}</span><b>{roles[0] ?? player.position}</b></div><div className="rating">{player.overall}</div><FootballerPhoto player={player} /><h2>{player.name}</h2><p>{player.country} · {type === "ICON" ? "Football legend" : "Current footballer"}</p><div className="player-type-line"><span className={`player-type-chip ${type === "ICON" ? "icon" : "current"}`}>{type}</span><span>PRIMARY {roles[0] ?? player.position}</span>{roles.length > 1 && <span>SUPPORTS {roles.slice(1).join(" · ")}</span>}</div><div className="player-roles" aria-label="Playable positions">{roles.map((role, index) => <span className={index === 0 ? "primary" : ""} key={role}>{role}</span>)}</div><div className="stats"><Stat value={player.pace} label="PAC" /><Stat value={player.shooting} label="SHO" /><Stat value={player.passing} label="PAS" /><Stat value={player.dribbling} label="DRI" /><Stat value={player.defending} label="DEF" /><Stat value={player.physical} label="PHY" /></div><div className="trait">✦ {player.trait}</div>
+  </motion.div>;
+});
+
 function Stat({ value, label }: { value: number; label: string }) { return <div><b>{value}</b><span>{label}</span></div>; }
 
 function squadPositionCounts(squad: SquadEntry[]): PoolTargets {
@@ -998,6 +1054,7 @@ const SquadTracker = React.memo(function SquadTracker({ squad, currentPosition, 
 
 function Arena({ socket, state, managerId, setError, leave }: { socket: GameSocket; state: RoomState; managerId: string; setError: (value: string) => void; leave: () => void }) {
   const me = state.managers.find(manager => manager.id === managerId)!;
+  const myBudget = me.budget ?? 0;
   const [custom, setCustom] = useState("");
   const [sending, setSending] = useState(false);
   const [compactMode, setCompactMode] = useState(() => localStorage.getItem("ae_compact") !== "0");
@@ -1035,7 +1092,7 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
   const canFormLineup = goalkeeperCount >= 1 && outfieldCount >= starterCount - 1;
   const hasPassed = (state.passedManagerIds ?? []).includes(managerId);
   const canComplete = me.squad.length >= maximumSquadSize && canFormLineup && !me.auctionComplete;
-  const cannotBid = sending || me.auctionComplete || hasPassed || !state.endsAt || me.squad.length >= maximumSquadSize || me.budget < minimum;
+  const cannotBid = sending || me.auctionComplete || hasPassed || !state.endsAt || me.squad.length >= maximumSquadSize || myBudget < minimum;
   const passOnPlayer = () => {
     if (hasPassed || !state.endsAt) return;
     setSending(true);
@@ -1064,10 +1121,10 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
   const quitSolo = () => leave();
   if (state.phase === "round_result") return <RoundResult state={state} />;
   return <main className={`arena page ${compactMode ? "compact-mode" : "comfortable-mode"}`}><div className="arena-top"><div><span>ROOM {state.code}</span><b>ROUND {state.roundIndex + 1}/{state.totalRounds}</b></div><div className="arena-controls"><div className="live"><i /> LIVE AUCTION</div><div className="secure-badge" title="Budgets and bids are validated by the server">🔒 SERVER SECURE</div><button type="button" onClick={enterFullscreen}>⛶ {isFullscreen ? "EXIT FULLSCREEN" : "FULLSCREEN"}</button><button type="button" onClick={toggleCompactMode}>{compactMode ? "COMFORT" : "COMPACT"}</button><button aria-label="Send fire reaction" onClick={() => socket.emit("room:reaction", { code: state.code, reaction: "🔥" })}>🔥</button>{state.isSolo && <button className="quit-match" onClick={quitSolo}>QUIT MATCH</button>}</div></div>
-    <div className="arena-grid"><div className="arena-left-stack"><SquadTracker squad={me.squad} currentPosition={state.currentFootballer?.position} squadSize={state.settings.squadSize} substituteCount={state.settings.substituteCount} /><aside className="panel manager-board"><h3>ROOM SQUADS</h3>{state.managers.map(manager => <div className={`manager-line ${manager.id === state.highestBidderId ? "leading" : ""} ${manager.id === managerId ? "you" : ""}`} key={manager.id}><span className="mini-avatar">{manager.avatar}</span><div><b>{manager.name}</b><small>{manager.auctionComplete ? "SQUAD COMPLETE" : `${manager.squad.length}/${maximumSquadSize} · ${Math.max(0, maximumSquadSize - manager.squad.length)} spots left`}</small></div><strong>{money(manager.budget)}</strong></div>)}</aside></div>
-      <section className="auction-stage">{state.currentFootballer && <PlayerCard player={state.currentFootballer} />}<div className="auction-meta"><AuctionTimer endsAt={state.endsAt} durationSeconds={state.settings.auctionSeconds} /><div className="current-price"><span>{state.currentBid ? "CURRENT BID" : state.settings.pricingMode === "ovr_scaled" ? "OVR OPENING PRICE" : "OPENING BID"}</span><strong>{money(state.currentBid || openingBid)}</strong><p>{state.highestBidderId ? `${state.managers.find(manager => manager.id === state.highestBidderId)?.name} leads` : state.settings.pricingMode === "ovr_scaled" ? `${state.currentFootballer?.overall ?? "—"} OVR value mode` : "Normal price mode"}</p></div></div></section>
+    <div className="arena-grid"><div className="arena-left-stack"><SquadTracker squad={me.squad} currentPosition={state.currentFootballer?.position} squadSize={state.settings.squadSize} substituteCount={state.settings.substituteCount} /><aside className="panel manager-board"><h3>ROOM SQUADS</h3>{state.managers.map(manager => <div className={`manager-line ${manager.id === state.highestBidderId ? "leading" : ""} ${manager.id === managerId ? "you" : ""}`} key={manager.id}><span className="mini-avatar">{manager.avatar}</span><div><b>{manager.name}</b><small>{manager.auctionComplete ? "SQUAD COMPLETE" : `${manager.squad.length}/${maximumSquadSize} · ${Math.max(0, maximumSquadSize - manager.squad.length)} spots left`}</small></div><strong className={manager.id === managerId ? "own-budget" : "private-budget"}>{manager.id === managerId ? money(myBudget) : "PRIVATE"}</strong></div>)}</aside></div>
+      <section className="auction-stage">{state.currentFootballer && <PlayerCard player={state.currentFootballer} iconSurprise={state.settings.playerPoolMode === "mixed" && state.settings.iconSurprise} />}<div className="auction-meta"><AuctionTimer endsAt={state.endsAt} durationSeconds={state.settings.auctionSeconds} /><div className="current-price"><span>{state.currentBid ? "CURRENT BID" : state.settings.pricingMode === "ovr_scaled" ? "OVR OPENING PRICE" : "OPENING BID"}</span><strong>{money(state.currentBid || openingBid)}</strong><p>{state.highestBidderId ? `${state.managers.find(manager => manager.id === state.highestBidderId)?.name} leads` : state.settings.pricingMode === "ovr_scaled" ? `${state.currentFootballer?.overall ?? "—"} OVR value mode` : "Normal price mode"}</p></div></div></section>
       <aside className="panel bid-feed"><h3>BID FEED</h3>{state.bidHistory.length === 0 ? <div className="empty-feed">No bids yet.<br />Make the first move.</div> : state.bidHistory.map((bid, index) => <div className={`feed-row ${index === 0 ? "latest" : ""}`} key={bid.id}><span>{bid.managerName}</span><b>{money(bid.amount)}</b></div>)}</aside></div>
-    <div className="bid-dock"><div className="budget-read"><span>YOUR BUDGET</span><b>{money(me.budget)}</b><small>{me.squad.length}/{maximumSquadSize} signed · {Math.max(0, maximumSquadSize - me.squad.length)} players to target · {Math.max(0, me.squad.length - starterCount)}/{state.settings.substituteCount} subs · {Math.max(0, maximumSquadSize - me.squad.length) ? Math.floor(me.budget / Math.max(1, maximumSquadSize - me.squad.length)) : me.budget}M per open slot</small></div><div className="quick-bids"><button disabled={cannotBid} onClick={() => actualBid(minimum)}>BID {money(minimum)}</button><button disabled={cannotBid || me.budget < minimum + 5} onClick={() => actualBid(minimum + 5)}>+5M</button><button disabled={cannotBid || me.budget < minimum + 10} onClick={() => actualBid(minimum + 10)}>+10M</button><button type="button" className={`pass-player ${hasPassed ? "passed" : ""}`} disabled={sending || me.auctionComplete || hasPassed || !state.endsAt || me.squad.length >= maximumSquadSize || me.budget < openingBid} onClick={passOnPlayer}>{hasPassed ? "PASSED" : "PASS PLAYER"}</button><button type="button" className={`complete-auction ${me.auctionComplete ? "done" : ""}`} disabled={sending || !canComplete} onClick={completeSquad}>{me.auctionComplete ? "SQUAD COMPLETE ✓" : `I'M DONE (${me.squad.length}/${maximumSquadSize})`}</button></div><form className="custom-bid" onSubmit={event => { event.preventDefault(); if (custom) actualBid(+custom); }}><input inputMode="numeric" enterKeyHint="send" aria-label="Custom bid amount" value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ""))} placeholder="CUSTOM BID" /><button type="submit" disabled={cannotBid || !custom || +custom > me.budget}>PLACE</button></form></div></main>;
+    <div className="bid-dock"><div className="budget-read"><span>YOUR BUDGET</span><b>{money(myBudget)}</b><small>{me.squad.length}/{maximumSquadSize} signed · {Math.max(0, maximumSquadSize - me.squad.length)} players to target · {Math.max(0, me.squad.length - starterCount)}/{state.settings.substituteCount} subs · {Math.max(0, maximumSquadSize - me.squad.length) ? Math.floor(myBudget / Math.max(1, maximumSquadSize - me.squad.length)) : myBudget}M per open slot</small></div><div className="quick-bids"><button disabled={cannotBid} onClick={() => actualBid(minimum)}>BID {money(minimum)}</button><button disabled={cannotBid || myBudget < minimum + 5} onClick={() => actualBid(minimum + 5)}>+5M</button><button disabled={cannotBid || myBudget < minimum + 10} onClick={() => actualBid(minimum + 10)}>+10M</button><button type="button" className={`pass-player ${hasPassed ? "passed" : ""}`} disabled={sending || me.auctionComplete || hasPassed || !state.endsAt || me.squad.length >= maximumSquadSize || myBudget < openingBid} onClick={passOnPlayer}>{hasPassed ? "PASSED" : "PASS PLAYER"}</button><button type="button" className={`complete-auction ${me.auctionComplete ? "done" : ""}`} disabled={sending || !canComplete} onClick={completeSquad}>{me.auctionComplete ? "SQUAD COMPLETE ✓" : `I'M DONE (${me.squad.length}/${maximumSquadSize})`}</button></div><form className="custom-bid" onSubmit={event => { event.preventDefault(); if (custom) actualBid(+custom); }}><input inputMode="numeric" enterKeyHint="send" aria-label="Custom bid amount" value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ""))} placeholder="CUSTOM BID" /><button type="submit" disabled={cannotBid || !custom || +custom > myBudget}>PLACE</button></form></div></main>;
 }
 
 function RoundResult({ state }: { state: RoomState }) {
@@ -1085,7 +1142,7 @@ function rolePosition(role: LineupRole): Position {
 function clientRoleScore(player: Footballer, role: LineupRole): number {
   const required = rolePosition(role);
   const roles = getFootballerRoles(player);
-  const position = player.primaryRole === role ? 100 : roles.includes(role) ? 88 : player.position === required ? 72 : player.secondary.includes(required) ? 58 : 22;
+  const position = player.primaryRole === role ? 100 : roles.includes(role) ? 98 : player.position === required ? 72 : player.secondary.includes(required) ? 58 : 22;
   let ability = player.overall;
   if (role === "GK") ability = player.goalkeeping;
   else if (["LB", "CB", "RB", "LWB", "RWB"].includes(role)) ability = player.defending * .45 + player.physical * .25 + player.pace * .18 + player.passing * .12;

@@ -22,6 +22,9 @@ export const DEFAULT_SETTINGS: GameSettings = {
   minimumBid: 1,
   bidIncrement: 1,
   pricingMode: "normal",
+  playerPoolMode: "current",
+  iconFrequency: "normal",
+  iconSurprise: false,
   auctionSeconds: 12,
   squadSize: 11,
   substituteCount: 5,
@@ -36,10 +39,12 @@ export const DEFAULT_SETTINGS: GameSettings = {
 const clamp = (value: number, min = 0, max = 100) => Math.max(min, Math.min(max, Math.round(value)));
 const average = (values: number[]) => values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
 
+type BudgetedManager = Omit<ManagerView, "budget"> & { budget: number };
+
 export function validateBid(args: {
   amount: number;
   currentBid: number;
-  manager: ManagerView;
+  manager: BudgetedManager;
   settings: GameSettings;
   auctionActive: boolean;
   footballer?: Footballer | null;
@@ -54,8 +59,8 @@ export function validateBid(args: {
   if (amount > manager.budget) return "You do not have enough budget.";
   const maximumSquadSize = getConfiguredSquadSize(settings.squadSize, settings.substituteCount);
   if (manager.squad.length >= maximumSquadSize) return `Your squad is full (${getStartingLineupSize(settings.squadSize)} starters + ${settings.substituteCount} substitutes).`;
-  const catalogueId = footballer?.catalogId ?? footballer?.id;
-  if (catalogueId && manager.squad.some(entry => (entry.footballer.catalogId ?? entry.footballer.id) === catalogueId)) {
+  const catalogueId = footballer?.canonicalId ?? footballer?.catalogId ?? footballer?.id;
+  if (catalogueId && manager.squad.some(entry => (entry.footballer.canonicalId ?? entry.footballer.catalogId ?? entry.footballer.id) === catalogueId)) {
     return `You already own ${footballer?.name ?? "this footballer"}.`;
   }
   const playersStillNeededAfterWin = Math.max(0, maximumSquadSize - manager.squad.length - 1);
@@ -91,7 +96,7 @@ export function calculatePlayerSlotFit(player: Footballer, role: LineupRole): nu
   const required = rolePosition(role);
   const playableRoles = getFootballerRoles(player);
   const primaryRole = playableRoles[0];
-  const positionScore = primaryRole === role ? 100 : playableRoles.includes(role) ? 86 : player.position === required ? 72 : player.secondary.includes(required) ? 58 : 22;
+  const positionScore = primaryRole === role ? 100 : playableRoles.includes(role) ? 98 : player.position === required ? 72 : player.secondary.includes(required) ? 58 : 22;
   return clamp(roleAbility(player, role) * .68 + positionScore * .32);
 }
 
@@ -180,7 +185,7 @@ export function validateAndBuildLineup(squad: SquadEntry[], formationId: string,
   });
 }
 
-function playersForRoles(manager: ManagerView, roles: LineupRole[]): Footballer[] {
+function playersForRoles(manager: BudgetedManager, roles: LineupRole[]): Footballer[] {
   const playerMap = new Map(manager.squad.map(entry => [entry.footballer.id, entry.footballer]));
   return manager.lineup.filter(item => roles.includes(item.role)).map(item => playerMap.get(item.footballerId)).filter((player): player is Footballer => !!player);
 }
@@ -189,7 +194,7 @@ function attackScore(player: Footballer): number { return player.shooting * .38 
 function midfieldScore(player: Footballer): number { return player.passing * .34 + player.dribbling * .23 + player.physical * .16 + player.defending * .14 + player.shooting * .13; }
 function defenceScore(player: Footballer): number { return player.defending * .44 + player.physical * .25 + player.pace * .16 + player.passing * .15; }
 
-export function calculateRanking(manager: ManagerView): Omit<Ranking, "rank"> {
+export function calculateRanking(manager: BudgetedManager): Omit<Ranking, "rank"> {
   const formation = FORMATION_BY_ID.get(manager.formationId ?? "") ?? FORMATIONS[0]!;
   const lineupIds = new Set(manager.lineup.map(item => item.footballerId));
   const starters = manager.squad.filter(entry => lineupIds.has(entry.footballer.id));
@@ -234,7 +239,7 @@ export function calculateRanking(manager: ManagerView): Omit<Ranking, "rank"> {
   };
 }
 
-export function rankManagers(managers: ManagerView[]): Ranking[] {
+export function rankManagers(managers: BudgetedManager[]): Ranking[] {
   return managers.map(calculateRanking)
     .sort((a, b) => b.score - a.score || b.lineupFit - a.lineupFit || b.startingXIQuality - a.startingXIQuality || b.benchStrength - a.benchStrength || b.remainingBudget - a.remainingBudget)
     .map((entry, index) => ({ ...entry, rank: index + 1 }));

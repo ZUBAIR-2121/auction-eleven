@@ -473,3 +473,117 @@ describe("v1.6 player pools and private budgets", () => {
     expect(state.poolSelectionValid).toBe(true);
   });
 });
+
+describe("v1.8 canonical eligible pools, manual selection and pool sizes", () => {
+  it("makes the full CURRENT, ICON and MIXED databases eligible in ALL mode", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const created = manager.create("AllPoolHost", "session-all-pool", "socket-all-pool", false);
+
+    manager.updateSettings(created.code, created.managerId, { playerPoolMode: "current", auctionPoolSizeMode: "all" });
+    let state = manager.getState(created.code, created.managerId);
+    const currentCount = FOOTBALLERS.filter(player => (player.playerType ?? "CURRENT") === "CURRENT").length;
+    expect(state.poolValidation.eligibleAvailable).toBe(currentCount);
+    expect(state.selectedFootballerIds).toHaveLength(currentCount);
+
+    manager.updateSettings(created.code, created.managerId, { playerPoolMode: "icons", auctionPoolSizeMode: "all" });
+    state = manager.getState(created.code, created.managerId);
+    const iconCount = FOOTBALLERS.filter(player => player.playerType === "ICON").length;
+    expect(state.poolValidation.eligibleAvailable).toBe(iconCount);
+    expect(state.selectedFootballerIds).toHaveLength(iconCount);
+
+    manager.updateSettings(created.code, created.managerId, { playerPoolMode: "mixed", auctionPoolSizeMode: "all" });
+    state = manager.getState(created.code, created.managerId);
+    expect(state.poolValidation.eligibleAvailable).toBe(FOOTBALLERS.length);
+    expect(state.selectedFootballerIds).toHaveLength(FOOTBALLERS.length);
+    expect(new Set(state.selectedFootballerIds).size).toBe(FOOTBALLERS.length);
+  });
+
+  it("keeps an exact manual star-and-icon selection as the only CUSTOM eligibility set", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const created = manager.create("NamedCustomHost", "session-named-custom", "socket-named-custom", false);
+    manager.updateSettings(created.code, created.managerId, { playerPoolMode: "custom", auctionPoolSizeMode: "all" });
+    const canonicalIds = ["lionel-messi", "cristiano-ronaldo", "kylian-mbappe", "neymar", "ruud-gullit", "ronaldinho", "paolo-maldini", "gianluigi-buffon"];
+    const ids = canonicalIds.map(canonicalId => {
+      const player = FOOTBALLERS.find(item => item.canonicalId === canonicalId);
+      expect(player, `Missing ${canonicalId}`).toBeTruthy();
+      return player!.id;
+    });
+    manager.updatePlayerPool(created.code, created.managerId, ids);
+    const state = manager.getState(created.code, created.managerId);
+    expect(state.customPlayerIds).toEqual(ids);
+    expect(new Set(state.selectedFootballerIds)).toEqual(new Set(ids));
+    expect(state.poolValidation.eligibleAvailable).toBe(ids.length);
+  });
+
+  it("keeps the host's custom eligible IDs unchanged when another manager joins", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const created = manager.create("ManualHost", "session-manual-host", "socket-manual-host", false);
+    manager.updateSettings(created.code, created.managerId, { managerLimit: 2, squadSize: 6, substituteCount: 0, playerPoolMode: "custom" });
+    const selected = [
+      ...FOOTBALLERS.filter(player => player.position === "GK").slice(0, 2),
+      ...FOOTBALLERS.filter(player => player.position === "DEF").slice(0, 4),
+      ...FOOTBALLERS.filter(player => player.position === "MID").slice(0, 4),
+      ...FOOTBALLERS.filter(player => player.position === "FWD").slice(0, 2)
+    ];
+    const ids = selected.map(player => player.id);
+    manager.updatePlayerPool(created.code, created.managerId, ids);
+    expect(manager.getState(created.code, created.managerId).customPlayerIds).toEqual(ids);
+
+    manager.join(created.code, "ManualGuest", "session-manual-guest", "socket-manual-guest");
+    const afterJoin = manager.getState(created.code, created.managerId);
+    expect(afterJoin.customPlayerIds).toEqual(ids);
+    expect(new Set(afterJoin.selectedFootballerIds)).toEqual(new Set(ids));
+  });
+
+  it("starts CUSTOM mode with the exact validated manual IDs instead of regenerating them", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const created = manager.create("ExactHost", "session-exact-host", "socket-exact-host", false);
+      manager.updateSettings(created.code, created.managerId, { managerLimit: 2, squadSize: 6, substituteCount: 0, playerPoolMode: "custom", auctionPoolSizeMode: "all" });
+      const manual = [
+        ...FOOTBALLERS.filter(player => player.position === "GK").slice(0, 2),
+        ...FOOTBALLERS.filter(player => player.position === "DEF").slice(0, 4),
+        ...FOOTBALLERS.filter(player => player.position === "MID").slice(0, 4),
+        ...FOOTBALLERS.filter(player => player.position === "FWD").slice(0, 2)
+      ];
+      const manualIds = manual.map(player => player.id);
+      manager.updatePlayerPool(created.code, created.managerId, manualIds);
+      const guest = manager.join(created.code, "ExactGuest", "session-exact-guest", "socket-exact-guest");
+      manager.setReady(created.code, created.managerId, true);
+      manager.setReady(created.code, guest.managerId, true);
+      manager.start(created.code, created.managerId);
+      const state = manager.getState(created.code, created.managerId);
+      expect(state.totalRounds).toBe(manualIds.length);
+      expect(new Set(state.selectedFootballerIds)).toEqual(new Set(manualIds));
+      expect(state.currentFootballer && manualIds.includes(state.currentFootballer.id)).toBe(true);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("supports QUICK, STANDARD, LARGE, ALL and custom-count queue sizes without going below the squad requirement", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const created = manager.create("SizeHost", "session-size-host-v18", "socket-size-host-v18", false);
+    manager.updateSettings(created.code, created.managerId, { managerLimit: 3, squadSize: 11, substituteCount: 5, playerPoolMode: "mixed" });
+    const required = 48;
+
+    manager.updateSettings(created.code, created.managerId, { auctionPoolSizeMode: "quick" });
+    const quick = manager.getState(created.code, created.managerId).poolValidation.selected;
+    manager.updateSettings(created.code, created.managerId, { auctionPoolSizeMode: "standard" });
+    const standard = manager.getState(created.code, created.managerId).poolValidation.selected;
+    manager.updateSettings(created.code, created.managerId, { auctionPoolSizeMode: "large" });
+    const large = manager.getState(created.code, created.managerId).poolValidation.selected;
+    manager.updateSettings(created.code, created.managerId, { auctionPoolSizeMode: "all" });
+    const all = manager.getState(created.code, created.managerId).poolValidation.selected;
+    manager.updateSettings(created.code, created.managerId, { auctionPoolSizeMode: "custom", auctionPoolCustomCount: 60 });
+    const custom = manager.getState(created.code, created.managerId).poolValidation.selected;
+
+    expect(quick).toBeGreaterThanOrEqual(required);
+    expect(standard).toBeGreaterThanOrEqual(quick);
+    expect(large).toBeGreaterThanOrEqual(standard);
+    expect(all).toBe(FOOTBALLERS.length);
+    expect(custom).toBe(60);
+  });
+});

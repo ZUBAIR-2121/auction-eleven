@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
-import { getConfiguredSquadSize, getMinimumFootballersRequired, getOpeningBid, getSquadPositionTargets, getStartingLineupSize } from "@auction-eleven/shared";
+import { getConfiguredSquadSize, getFootballerRoles, getMinimumFootballersRequired, getOpeningBid, getSquadPositionTargets, getStartingLineupSize } from "@auction-eleven/shared";
 import type {
+  AuctionPoolSizeMode,
   Award,
   AuctionStatePatch,
   BidEntry,
@@ -69,6 +70,8 @@ const settingsSchema = z.object({
   bidIncrement: z.number().int().min(1).max(20).optional(),
   pricingMode: z.enum(["normal", "ovr_scaled"]).optional(),
   playerPoolMode: z.enum(["current", "icons", "mixed", "custom"]).optional(),
+  auctionPoolSizeMode: z.enum(["quick", "standard", "large", "all", "custom"]).optional(),
+  auctionPoolCustomCount: z.number().int().min(1).max(220).optional(),
   iconFrequency: z.enum(["low", "normal", "high"]).optional(),
   iconSurprise: z.boolean().optional(),
   auctionSeconds: z.number().int().min(10).max(30).optional(),
@@ -90,7 +93,14 @@ const passwordSchema = z.string().trim().min(4, "Room passwords need at least fo
 const AVATARS = ["🦁", "🐺", "🦅", "🐉", "🦊", "🐯", "🦈", "⚡", "🔥", "👑", "🦂", "🦬", "🦏"];
 const BOT_NAMES = ["Bargain Hunter AI", "Aggressive Bidder AI", "Star Collector AI", "Balanced Manager AI", "Tactical Specialist AI", "Last-Second Sniper AI", "Value Scout AI", "Pressure Manager AI", "Elite Collector AI", "Formation Expert AI", "Counter Bidder AI", "Patient Sniper AI"];
 const ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-const shuffle = <T>(input: T[]): T[] => [...input].sort(() => Math.random() - .5);
+const shuffle = <T>(input: T[]): T[] => {
+  const output = [...input];
+  for (let index = output.length - 1; index > 0; index--) {
+    const swapIndex = crypto.randomInt(index + 1);
+    [output[index], output[swapIndex]] = [output[swapIndex]!, output[index]!];
+  }
+  return output;
+};
 
 export class RoomManager {
   private rooms = new Map<string, InternalRoom>();
@@ -162,7 +172,17 @@ export class RoomManager {
 
   private recommendedPoolSize(managerCount: number, settings: GameSettings, eligibleCount: number): number {
     const required = getMinimumFootballersRequired(managerCount, settings.squadSize, settings.substituteCount);
-    return Math.min(eligibleCount, Math.max(required, Math.ceil(required * 1.18)));
+    return Math.min(eligibleCount, Math.max(required, Math.ceil(required * 1.25)));
+  }
+
+  private targetPoolSize(managerCount: number, settings: GameSettings, eligibleCount: number): number {
+    const required = getMinimumFootballersRequired(managerCount, settings.squadSize, settings.substituteCount);
+    const mode: AuctionPoolSizeMode = settings.auctionPoolSizeMode ?? "standard";
+    if (mode === "all") return eligibleCount;
+    if (mode === "custom") return Math.min(eligibleCount, Math.max(1, Math.round(settings.auctionPoolCustomCount ?? required)));
+    if (mode === "quick") return Math.min(eligibleCount, Math.max(required, Math.ceil(required * 1.08)));
+    if (mode === "large") return Math.min(eligibleCount, Math.max(required, Math.ceil(required * 1.55)));
+    return this.recommendedPoolSize(managerCount, settings, eligibleCount);
   }
 
   private minimumPositionCounts(managerCount: number, settings: GameSettings): PoolTargets {
@@ -210,41 +230,111 @@ export class RoomManager {
     const desiredCurrent = Math.min(current.length, count - desiredIcons);
     const chosen = [...icons.slice(0, desiredIcons), ...current.slice(0, desiredCurrent)];
     if (chosen.length < count) {
-      const used = new Set(chosen.map(player => player.id));
-      chosen.push(...shuffle(candidates.filter(player => !used.has(player.id))).slice(0, count - chosen.length));
+      const used = new Set(chosen.map(player => this.playerIdentity(player)));
+      chosen.push(...shuffle(candidates.filter(player => !used.has(this.playerIdentity(player)))).slice(0, count - chosen.length));
     }
     return chosen;
   }
 
-  private autoSelectFor(settings: GameSettings, managerCount: number, modeOverride?: PlayerPoolMode): string[] {
-    const mode = modeOverride ?? settings.playerPoolMode;
-    const eligible = this.eligiblePlayers(settings, mode === "custom" ? "mixed" : mode);
-    const total = this.recommendedPoolSize(managerCount, settings, eligible.length);
-    const targets = this.recommendedPositionCounts(managerCount, settings, total);
+  private uniquePlayers(players: Footballer[]): Footballer[] {
+    return [...new Map(players.map(player => [this.playerIdentity(player), player])).values()];
+  }
+
+  private eligiblePlayersForRoom(room: InternalRoom): Footballer[] {
+    if (room.settings.playerPoolMode !== "custom") return this.uniquePlayers(this.eligiblePlayers(room.settings));
+    return this.uniquePlayers(room.customPlayerIds.map(id => FOOTBALLER_BY_ID.get(id)).filter((player): player is Footballer => !!player));
+  }
+
+  private roleCoverageTargets(managerCount: number, settings: GameSettings): Array<{ roles: string[]; target: number }> {
+    const starters = getStartingLineupSize(settings.squadSize);
+    return [
+      { roles: ["GK"], target: managerCount },
+      { roles: ["CB"], target: starters >= 8 ? managerCount * 2 : managerCount },
+      { roles: ["LB", "LWB"], target: starters >= 9 ? managerCount : 0 },
+      { roles: ["RB", "RWB"], target: starters >= 9 ? managerCount : 0 },
+      { roles: ["CM", "CDM", "CAM"], target: starters >= 7 ? managerCount * 2 : managerCount },
+      { roles: ["LM", "LW"], target: starters >= 10 ? managerCount : 0 },
+      { roles: ["RM", "RW"], target: starters >= 10 ? managerCount : 0 },
+      { roles: ["ST", "CF"], target: managerCount }
+    ].filter(group => group.target > 0);
+  }
+
+  private selectBalancedFromEligible(
+    settings: GameSettings,
+    managerCount: number,
+    eligibleInput: Footballer[],
+    total: number,
+    mixedSelection: boolean
+  ): string[] {
+    const eligible = shuffle(this.uniquePlayers(eligibleInput));
+    const limitedTotal = Math.min(Math.max(0, total), eligible.length);
+    if (limitedTotal >= eligible.length) return eligible.map(player => player.id);
+
     const selected: Footballer[] = [];
+    const used = new Set<string>();
+    const add = (player: Footballer | undefined) => {
+      if (!player || selected.length >= limitedTotal) return false;
+      const identity = this.playerIdentity(player);
+      if (used.has(identity)) return false;
+      used.add(identity);
+      selected.push(player);
+      return true;
+    };
+    const available = () => eligible.filter(player => !used.has(this.playerIdentity(player)));
+
+    // Seed scarce tactical roles first. A dual-primary or secondary-role player
+    // can satisfy a coverage group while still counting as one unique card.
+    for (const group of this.roleCoverageTargets(managerCount, settings)) {
+      const matches = () => selected.filter(player => getFootballerRoles(player).some(role => group.roles.includes(role))).length;
+      let missing = Math.max(0, group.target - matches());
+      if (!missing) continue;
+      const candidates = shuffle(available().filter(player => getFootballerRoles(player).some(role => group.roles.includes(role))));
+      for (const candidate of candidates) {
+        if (!missing || selected.length >= limitedTotal) break;
+        if (add(candidate)) missing--;
+      }
+    }
+
+    // Then satisfy broad-position health so the auction cannot become wildly
+    // attacker-heavy or goalkeeper-light merely because of random ordering.
+    const targets = this.recommendedPositionCounts(managerCount, settings, limitedTotal);
     for (const position of POSITIONS) {
-      const candidates = eligible.filter(player => player.position === position);
-      const wanted = Math.min(targets[position], candidates.length);
-      const chosen = mode === "mixed" || mode === "custom"
+      const have = selected.filter(player => player.position === position).length;
+      const wanted = Math.max(0, Math.min(targets[position] - have, limitedTotal - selected.length));
+      if (!wanted) continue;
+      const candidates = available().filter(player => player.position === position);
+      const chosen = mixedSelection
         ? this.chooseMixed(candidates, wanted, settings.iconFrequency)
         : shuffle(candidates).slice(0, wanted);
-      selected.push(...chosen);
+      chosen.forEach(add);
     }
-    if (selected.length < total) {
-      const used = new Set(selected.map(player => player.id));
-      const remaining = shuffle(eligible.filter(player => !used.has(player.id))).slice(0, total - selected.length);
-      selected.push(...remaining);
+
+    if (selected.length < limitedTotal) {
+      const remaining = available();
+      const chosen = mixedSelection
+        ? this.chooseMixed(remaining, limitedTotal - selected.length, settings.iconFrequency)
+        : shuffle(remaining).slice(0, limitedTotal - selected.length);
+      chosen.forEach(add);
     }
-    return [...new Map(selected.map(player => [this.playerIdentity(player), player])).values()].map(player => player.id);
+
+    return selected.slice(0, limitedTotal).map(player => player.id);
+  }
+
+  private autoSelectForRoom(room: InternalRoom, managerCount = this.plannedManagerCount(room)): string[] {
+    const eligible = this.eligiblePlayersForRoom(room);
+    const total = this.targetPoolSize(managerCount, room.settings, eligible.length);
+    const mixedSelection = room.settings.playerPoolMode === "mixed" || room.settings.playerPoolMode === "custom";
+    return this.selectBalancedFromEligible(room.settings, managerCount, eligible, total, mixedSelection);
   }
 
   private poolValidationFor(room: InternalRoom, managerCount = this.plannedManagerCount(room)): PoolValidationSummary {
     const selected = room.selectedFootballerIds.map(id => FOOTBALLER_BY_ID.get(id)).filter((player): player is Footballer => !!player);
-    const uniqueSelected = [...new Map(selected.map(player => [this.playerIdentity(player), player])).values()];
-    const eligible = this.eligiblePlayers(room.settings);
+    const uniqueSelected = this.uniquePlayers(selected);
+    const eligible = this.eligiblePlayersForRoom(room);
     const eligibleIds = new Set(eligible.map(player => player.id));
     const required = getMinimumFootballersRequired(managerCount, room.settings.squadSize, room.settings.substituteCount);
     const recommended = this.recommendedPoolSize(managerCount, room.settings, eligible.length);
+    const target = this.targetPoolSize(managerCount, room.settings, eligible.length);
     const minimum = this.minimumPositionCounts(managerCount, room.settings);
     const counts = this.selectionCounts(uniqueSelected.map(player => player.id));
     const missingByPosition: PoolTargets = {
@@ -255,23 +345,35 @@ export class RoomManager {
     };
     const errors: string[] = [];
     const warnings: string[] = [];
-    if (uniqueSelected.length < required) errors.push(`Add at least ${required - uniqueSelected.length} more footballer${required - uniqueSelected.length === 1 ? "" : "s"}. This room needs ${required} unique players.`);
-    if (room.settings.playerPoolMode !== "custom" && eligible.length < required) errors.push(`${room.settings.playerPoolMode === "icons" ? "Icons" : room.settings.playerPoolMode === "current" ? "Current players" : "Eligible players"} provide only ${eligible.length} unique footballers, but this setup needs ${required}. Reduce managers/substitutes or choose Mixed/Custom.`);
-    if (room.settings.playerPoolMode !== "custom" && uniqueSelected.some(player => !eligibleIds.has(player.id))) errors.push("The selected pool contains footballers outside the chosen player-pool mode.");
+
+    if (room.settings.playerPoolMode === "custom" && room.customPlayerIds.length === 0) {
+      errors.push("Custom Player Pool is empty. Select footballers before starting the match.");
+    }
+    if (eligible.length < required) {
+      const source = room.settings.playerPoolMode === "custom" ? "Your custom selection" : room.settings.playerPoolMode === "icons" ? "Icons" : room.settings.playerPoolMode === "current" ? "Current players" : "Eligible players";
+      errors.push(`${source} contains ${eligible.length} unique footballers, but this setup needs at least ${required}. Add players, reduce substitutes/managers, or choose a larger player type.`);
+    }
+    if (room.settings.auctionPoolSizeMode === "custom" && room.settings.auctionPoolCustomCount < required) {
+      errors.push(`Custom auction count is ${room.settings.auctionPoolCustomCount}, but this room needs at least ${required} footballers.`);
+    }
+    if (uniqueSelected.length < required) errors.push(`The actual auction pool has ${uniqueSelected.length} footballers, but this room needs ${required}. Increase Auction Pool Size.`);
+    if (uniqueSelected.some(player => !eligibleIds.has(player.id))) errors.push("The actual auction pool contains a footballer outside the selected eligibility rules.");
     for (const position of POSITIONS) if (missingByPosition[position] > 0) errors.push(`Add ${missingByPosition[position]} more ${position} footballer${missingByPosition[position] === 1 ? "" : "s"} for healthy squad coverage.`);
 
-    const roleCount = (roles: string[]) => uniqueSelected.filter(player => [player.primaryRole, ...(player.secondaryRoles ?? [])].some(role => roles.includes(role))).length;
+    const roleCount = (roles: string[]) => uniqueSelected.filter(player => getFootballerRoles(player).some(role => roles.includes(role))).length;
     const managers = managerCount;
     const starters = getStartingLineupSize(room.settings.squadSize);
     if (starters >= 9 && roleCount(["LB", "LWB"]) < managers) warnings.push(`Only ${roleCount(["LB", "LWB"])} natural left-back options are selected for ${managers} managers.`);
     if (starters >= 9 && roleCount(["RB", "RWB"]) < managers) warnings.push(`Only ${roleCount(["RB", "RWB"])} natural right-back options are selected for ${managers} managers.`);
     if (starters >= 8 && roleCount(["CB"]) < managers * 2) warnings.push("The pool is light on natural centre-backs; some formations may be harder to build.");
     if (roleCount(["CM", "CDM", "CAM"]) < managers * Math.max(1, Math.floor(starters / 4))) warnings.push("The pool is light on central midfield options.");
+    if (room.settings.auctionPoolSizeMode === "all" && uniqueSelected.length >= 100) warnings.push(`ALL mode will auction ${uniqueSelected.length} footballers and may create a long match.`);
 
     return {
       selected: uniqueSelected.length,
       required,
       recommended,
+      target,
       eligibleAvailable: eligible.length,
       selectedCurrent: uniqueSelected.filter(player => (player.playerType ?? "CURRENT") === "CURRENT").length,
       selectedIcons: uniqueSelected.filter(player => player.playerType === "ICON").length,
@@ -281,8 +383,8 @@ export class RoomManager {
     };
   }
 
-  private refreshAutoPool(room: InternalRoom, modeOverride?: PlayerPoolMode): void {
-    room.selectedFootballerIds = this.autoSelectFor(room.settings, this.plannedManagerCount(room), modeOverride);
+  private refreshAutoPool(room: InternalRoom): void {
+    room.selectedFootballerIds = this.autoSelectForRoom(room);
     room.settings.poolTargets = this.selectionCounts(room.selectedFootballerIds);
   }
 
@@ -463,6 +565,7 @@ export class RoomManager {
       settings: room.settings,
       availableFootballers: room.phase === "lobby" ? FOOTBALLERS : [],
       selectedFootballerIds: room.selectedFootballerIds,
+      customPlayerIds: room.phase === "lobby" ? room.customPlayerIds : [],
       poolSelectionValid: poolValidation.errors.length === 0,
       poolValidation,
       roundIndex: room.roundIndex,
@@ -541,6 +644,7 @@ export class RoomManager {
       managers,
       settings,
       selectedFootballerIds: [],
+      customPlayerIds: [],
       roundIndex: 0,
       totalRounds: 0,
       currentFootballer: null,
@@ -623,7 +727,8 @@ export class RoomManager {
     if (room.managers.some(manager => manager.name.toLowerCase() === name.toLowerCase())) throw new Error("That manager name is already used in this room.");
     const manager = this.manager(name, sessionId, socketId, false, false, room.settings.startingBudget, room.managers.length);
     room.managers.push(manager);
-    if (room.settings.playerPoolMode !== "custom") this.refreshAutoPool(room);
+    // Pool sizing is based on configured managerLimit while in the lobby, so a
+    // join must not silently reroll or replace the host's visible player pool.
     this.broadcast(room);
     this.emitDirectoryChanged();
     return { code, managerId: manager.id };
@@ -791,10 +896,29 @@ export class RoomManager {
     if (parsed.managerLimit && !room.isSolo && parsed.managerLimit < room.managers.length) {
       throw new Error(`This room already has ${room.managers.length} managers. Choose a larger squad limit.`);
     }
+
+    const previousSelected = [...room.selectedFootballerIds];
+    const enteringCustom = parsed.playerPoolMode === "custom" && room.settings.playerPoolMode !== "custom";
     room.settings = { ...room.settings, ...parsed };
+    if (enteringCustom) {
+      if (room.customPlayerIds.length === 0) room.customPlayerIds = previousSelected;
+      // Manual player selection means exactly those IDs are eligible by default.
+      // Hosts can deliberately choose QUICK/STANDARD/LARGE afterwards if they
+      // want the server to take a balanced subset of their custom eligibility.
+      if (parsed.auctionPoolSizeMode === undefined) room.settings.auctionPoolSizeMode = "all";
+    }
+
     this.syncSoloBots(room);
-    const poolAffectingChange = parsed.playerPoolMode !== undefined || parsed.iconFrequency !== undefined || parsed.managerLimit !== undefined || parsed.squadSize !== undefined || parsed.substituteCount !== undefined || parsed.poolTargets !== undefined;
-    if (poolAffectingChange && room.settings.playerPoolMode !== "custom") this.refreshAutoPool(room);
+    const poolAffectingChange =
+      parsed.playerPoolMode !== undefined ||
+      parsed.auctionPoolSizeMode !== undefined ||
+      parsed.auctionPoolCustomCount !== undefined ||
+      parsed.iconFrequency !== undefined ||
+      parsed.managerLimit !== undefined ||
+      parsed.squadSize !== undefined ||
+      parsed.substituteCount !== undefined ||
+      parsed.poolTargets !== undefined;
+    if (poolAffectingChange) this.refreshAutoPool(room);
     room.managers.forEach(manager => { manager.budget = room.settings.startingBudget; });
     this.broadcast(room);
     this.emitDirectoryChanged();
@@ -816,8 +940,8 @@ export class RoomManager {
       if (identities.has(identity)) throw new Error(`The custom pool contains a duplicate footballer: ${player.name}.`);
       identities.add(identity);
     }
-    room.selectedFootballerIds = uniqueIds;
-    room.settings.poolTargets = this.selectionCounts(uniqueIds);
+    room.customPlayerIds = uniqueIds;
+    this.refreshAutoPool(room);
     this.broadcast(room);
   }
 
@@ -825,7 +949,13 @@ export class RoomManager {
     const room = this.get(code);
     if (room.hostId !== managerId) throw new Error("Only the host can auto-build the player pool.");
     if (room.phase !== "lobby") throw new Error("The player pool is locked after kickoff.");
-    this.refreshAutoPool(room, room.settings.playerPoolMode === "custom" ? "mixed" : undefined);
+    if (room.settings.playerPoolMode === "custom") {
+      const managerCount = this.plannedManagerCount(room);
+      const desired = this.recommendedPoolSize(managerCount, room.settings, FOOTBALLERS.length);
+      room.customPlayerIds = this.selectBalancedFromEligible(room.settings, managerCount, FOOTBALLERS, desired, true);
+      room.settings.auctionPoolSizeMode = "all";
+    }
+    this.refreshAutoPool(room);
     this.broadcast(room);
   }
 
@@ -947,8 +1077,17 @@ export class RoomManager {
       const reserve = Math.max(0, this.configuredSquadSize(room) - bot.squad.length - 1) * room.settings.minimumBid;
       const targets = getSquadPositionTargets(getStartingLineupSize(room.settings.squadSize));
       const ownedAtPosition = bot.squad.filter(entry => entry.footballer.position === footballer.position).length;
-      const positionalNeed = Math.max(0, targets[footballer.position] - ownedAtPosition) / Math.max(1, targets[footballer.position]);
-      const qualityBoost = Math.max(0, footballer.overall - 82) * .012 + (footballer.playerType === "ICON" ? .08 : 0);
+      const broadNeed = Math.max(0, targets[footballer.position] - ownedAtPosition) / Math.max(1, targets[footballer.position]);
+      const playerRoles = getFootballerRoles(footballer);
+      const roleNeeds = this.roleCoverageTargets(1, room.settings)
+        .filter(group => playerRoles.some(role => group.roles.includes(role)))
+        .map(group => {
+          const owned = bot.squad.filter(entry => getFootballerRoles(entry.footballer).some(role => group.roles.includes(role))).length;
+          return Math.max(0, group.target - owned) / Math.max(1, group.target);
+        });
+      const positionalNeed = Math.max(broadNeed, ...roleNeeds, 0);
+      const versatilityBoost = Math.max(0, playerRoles.length - 1) * .018;
+      const qualityBoost = Math.max(0, footballer.overall - 82) * .012 + (footballer.playerType === "ICON" ? .08 : 0) + versatilityBoost;
       const personalityIndex = room.managers.filter(item => item.isBot).findIndex(item => item.id === bot.id) % 6;
       const personality = [
         { value: -.18, need: .08, late: .10 },

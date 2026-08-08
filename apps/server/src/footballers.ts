@@ -565,6 +565,63 @@ function broadPositionForRole(role: LineupRole): Position {
   return "FWD";
 }
 
+/**
+ * Full-effectiveness dual-primary roles are intentionally limited to players
+ * with genuine long-term versatility. Most footballers keep one primary role.
+ * The first role remains primaryRole for backwards compatibility.
+ */
+const POSITION_MODEL_OVERRIDES: Record<string, { primaryRoles: LineupRole[]; secondaryRoles: LineupRole[] }> = {
+  "lionel-messi": { primaryRoles: ["RW", "CAM"], secondaryRoles: ["ST", "CF"] },
+  "cristiano-ronaldo": { primaryRoles: ["ST", "LW"], secondaryRoles: ["CF"] },
+  "neymar": { primaryRoles: ["LW", "CAM"], secondaryRoles: ["ST"] },
+  "kylian-mbappe": { primaryRoles: ["ST", "LW"], secondaryRoles: ["RW"] },
+  "ruud-gullit": { primaryRoles: ["CM", "CAM"], secondaryRoles: ["CDM", "ST"] },
+  "ronaldinho": { primaryRoles: ["LW", "CAM"], secondaryRoles: ["LM"] },
+  "pele": { primaryRoles: ["CAM", "ST"], secondaryRoles: ["CF"] },
+  "johan-cruyff": { primaryRoles: ["CF", "CAM"], secondaryRoles: ["ST"] },
+  "zinedine-zidane": { primaryRoles: ["CAM", "CM"], secondaryRoles: ["LM"] },
+  "lothar-matthaus": { primaryRoles: ["CM", "CDM"], secondaryRoles: ["CB"] },
+  "franz-beckenbauer": { primaryRoles: ["CB", "CDM"], secondaryRoles: ["CM"] },
+  "paolo-maldini": { primaryRoles: ["CB", "LB"], secondaryRoles: [] },
+  "joshua-kimmich": { primaryRoles: ["RB", "CDM"], secondaryRoles: ["CM"] },
+  "federico-valverde": { primaryRoles: ["CM", "RM"], secondaryRoles: ["RW", "CDM"] },
+  "bernardo-silva": { primaryRoles: ["CAM", "RW"], secondaryRoles: ["CM"] },
+  "phil-foden": { primaryRoles: ["CAM", "RW"], secondaryRoles: ["LW"] },
+  "son-heung-min": { primaryRoles: ["LW", "ST"], secondaryRoles: ["LM"] },
+  "trent-alexander-arnold": { primaryRoles: ["RB", "CM"], secondaryRoles: ["CDM", "RWB"] },
+  "rodri": { primaryRoles: ["CDM", "CM"], secondaryRoles: [] },
+  "jude-bellingham": { primaryRoles: ["CAM", "CM"], secondaryRoles: [] },
+  "kevin-de-bruyne": { primaryRoles: ["CAM", "CM"], secondaryRoles: [] },
+  "bukayo-saka": { primaryRoles: ["RW", "RM"], secondaryRoles: [] },
+  "antoine-griezmann": { primaryRoles: ["CF", "CAM"], secondaryRoles: ["ST"] },
+  "wayne-rooney": { primaryRoles: ["CF", "ST"], secondaryRoles: ["CAM"] },
+  "andres-iniesta": { primaryRoles: ["CM", "CAM"], secondaryRoles: ["LW"] },
+  "steven-gerrard": { primaryRoles: ["CM", "CDM"], secondaryRoles: ["CAM"] },
+  "yaya-toure": { primaryRoles: ["CM", "CDM"], secondaryRoles: ["CAM"] },
+  "marcelo": { primaryRoles: ["LB", "LWB"], secondaryRoles: ["LM"] },
+  "dani-alves": { primaryRoles: ["RB", "RWB"], secondaryRoles: ["RM"] }
+};
+
+function applyPositionModel(player: Footballer): Footballer {
+  const canonicalId = player.canonicalId ?? canonicalizeFootballerIdentity(player.name);
+  const override = POSITION_MODEL_OVERRIDES[canonicalId];
+  const primaryRoles = [...new Set(override?.primaryRoles ?? player.primaryRoles ?? [player.primaryRole])].slice(0, 2);
+  const safePrimaryRoles = player.position === "GK" ? (["GK"] as LineupRole[]) : primaryRoles.filter(role => role !== "GK");
+  const finalPrimaryRoles = safePrimaryRoles.length ? safePrimaryRoles : [player.primaryRole];
+  const primarySet = new Set(finalPrimaryRoles);
+  const secondaryRoles = [...new Set((override?.secondaryRoles ?? player.secondaryRoles ?? []).filter(role => role !== "GK" && !primarySet.has(role)))];
+  const position = broadPositionForRole(finalPrimaryRoles[0]!);
+  const secondary = [...new Set([...finalPrimaryRoles.slice(1), ...secondaryRoles].map(broadPositionForRole).filter(item => item !== position))];
+  return {
+    ...player,
+    position,
+    secondary,
+    primaryRole: finalPrimaryRoles[0]!,
+    primaryRoles: finalPrimaryRoles,
+    secondaryRoles
+  };
+}
+
 function buildImportedPlayer(seed: ImportedPlayerSeed, index: number): Footballer {
   const position = broadPositionForRole(seed.primaryRole);
   const v = (salt: number) => variation(index + 97, salt);
@@ -652,6 +709,6 @@ for (const catalogue of SUPPLIED_CATALOGUE) {
   merged.set(catalogue.id, imported);
 }
 
-export const FOOTBALLERS: Footballer[] = [...merged.values()];
+export const FOOTBALLERS: Footballer[] = [...merged.values()].map(applyPositionModel);
 export const FOOTBALLER_BY_ID = new Map(FOOTBALLERS.map(player => [player.id, player]));
 export const FOOTBALLER_BY_CANONICAL_ID = new Map(FOOTBALLERS.map(player => [player.canonicalId ?? player.id, player]));

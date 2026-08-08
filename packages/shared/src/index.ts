@@ -8,6 +8,7 @@ export type SubstituteCount = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
 export type PricingMode = "normal" | "ovr_scaled";
 export type PlayerType = "CURRENT" | "ICON";
 export type PlayerPoolMode = "current" | "icons" | "mixed" | "custom";
+export type AuctionPoolSizeMode = "quick" | "standard" | "large" | "all" | "custom";
 export type IconFrequency = "low" | "normal" | "high";
 export type RoomAccess = "public" | "password";
 export const MAX_SUBSTITUTES = 10;
@@ -123,9 +124,11 @@ export interface Footballer {
   club: string;
   position: Position;
   secondary: Position[];
-  /** Detailed on-pitch role used by the formation editor. */
+  /** Legacy first primary role. Kept so older saved rooms remain compatible. */
   primaryRole: LineupRole;
-  /** Additional natural roles. Primary role is never repeated here. */
+  /** One or two full-effectiveness positions. Falls back to [primaryRole] for older data. */
+  primaryRoles?: LineupRole[];
+  /** Additional natural roles that receive secondary-position effectiveness. */
   secondaryRoles: LineupRole[];
   overall: number;
   pace: number;
@@ -141,9 +144,9 @@ export interface Footballer {
   isRealPlayer: boolean;
 }
 
-export function getFootballerRoles(player: Footballer): LineupRole[] {
-  const explicit = [player.primaryRole, ...(player.secondaryRoles ?? [])].filter(Boolean) as LineupRole[];
-  if (explicit.length) return [...new Set(explicit)];
+export function getFootballerPrimaryRoles(player: Footballer): LineupRole[] {
+  const explicit = (player.primaryRoles?.length ? player.primaryRoles : [player.primaryRole]).filter(Boolean) as LineupRole[];
+  if (explicit.length) return [...new Set(explicit)].slice(0, 2);
   // Backward-compatible fallback for rooms created with an older server build.
   if (player.position === "GK") return ["GK"];
   if (player.position === "DEF") return ["CB"];
@@ -151,9 +154,18 @@ export function getFootballerRoles(player: Footballer): LineupRole[] {
   return ["ST"];
 }
 
+export function getFootballerSecondaryRoles(player: Footballer): LineupRole[] {
+  const primary = new Set(getFootballerPrimaryRoles(player));
+  return [...new Set((player.secondaryRoles ?? []).filter(role => !primary.has(role)))];
+}
+
+export function getFootballerRoles(player: Footballer): LineupRole[] {
+  return [...getFootballerPrimaryRoles(player), ...getFootballerSecondaryRoles(player)];
+}
+
 export function getRoleFitLabel(player: Footballer, role: LineupRole): "PRIMARY" | "SECONDARY" | "OUT OF POSITION" {
-  if (player.primaryRole === role) return "PRIMARY";
-  return (player.secondaryRoles ?? []).includes(role) ? "SECONDARY" : "OUT OF POSITION";
+  if (getFootballerPrimaryRoles(player).includes(role)) return "PRIMARY";
+  return getFootballerSecondaryRoles(player).includes(role) ? "SECONDARY" : "OUT OF POSITION";
 }
 
 export interface FootballerPhoto {
@@ -215,6 +227,8 @@ export interface GameSettings {
   bidIncrement: number;
   pricingMode: PricingMode;
   playerPoolMode: PlayerPoolMode;
+  auctionPoolSizeMode: AuctionPoolSizeMode;
+  auctionPoolCustomCount: number;
   iconFrequency: IconFrequency;
   iconSurprise: boolean;
   auctionSeconds: number;
@@ -291,6 +305,7 @@ export interface PoolValidationSummary {
   selected: number;
   required: number;
   recommended: number;
+  target: number;
   eligibleAvailable: number;
   selectedCurrent: number;
   selectedIcons: number;
@@ -335,6 +350,8 @@ export interface RoomState {
   settings: GameSettings;
   availableFootballers: Footballer[];
   selectedFootballerIds: string[];
+  /** Host-authored eligible IDs when playerPoolMode is custom. */
+  customPlayerIds: string[];
   poolSelectionValid: boolean;
   poolValidation: PoolValidationSummary;
   roundIndex: number;

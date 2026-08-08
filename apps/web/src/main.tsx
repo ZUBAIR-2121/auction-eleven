@@ -11,8 +11,11 @@ import {
   getMinimumFootballersRequired,
   getStartingLineupSize,
   getSquadPositionTargets,
+  getFootballerPrimaryRoles,
+  getFootballerSecondaryRoles,
   getFootballerRoles,
   getRoleFitLabel,
+  type AuctionPoolSizeMode,
   type AuctionStatePatch,
   type BotDifficulty,
   type ClientToServerEvents,
@@ -171,6 +174,13 @@ const BOT_DIFFICULTIES: BotDifficulty[] = ["Amateur", "Professional", "World Cla
 const PRICING_MODES: Array<{ id: PricingMode; title: string; description: string }> = [
   { id: "normal", title: "Normal", description: "Every footballer opens at the same minimum bid." },
   { id: "ovr_scaled", title: "OVR Pricing", description: "Higher-rated footballers begin at a higher price." }
+];
+const AUCTION_POOL_SIZE_MODES: Array<{ id: AuctionPoolSizeMode; title: string; description: string }> = [
+  { id: "quick", title: "Quick", description: "Minimum squads plus a small reserve." },
+  { id: "standard", title: "Standard", description: "Balanced variety for a normal-length auction." },
+  { id: "large", title: "Large", description: "More choices and more passing strategy." },
+  { id: "all", title: "All", description: "Auction every eligible footballer exactly once." },
+  { id: "custom", title: "Custom Count", description: "Choose the exact auction queue size." }
 ];
 const CHAT_EMOJIS = ["😀", "😂", "😍", "😎", "🤔", "😱", "😭", "😡", "👏", "🙌", "👍", "👎", "🤝", "🔥", "⚡", "💸", "💰", "🏆", "🥇", "⚽", "🥅", "🧤", "🚀", "🎯", "💪", "🧠", "❤️", "✅", "❌", "👀", "🎉", "🫡"];
 
@@ -836,6 +846,8 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
   const changeBotDifficulty = (botDifficulty: BotDifficulty) => updateSettings({ botDifficulty });
   const changePricingMode = (pricingMode: PricingMode) => updateSettings({ pricingMode });
   const changePlayerPoolMode = (playerPoolMode: PlayerPoolMode) => updateSettings({ playerPoolMode });
+  const changeAuctionPoolSizeMode = (auctionPoolSizeMode: AuctionPoolSizeMode) => updateSettings({ auctionPoolSizeMode });
+  const changeAuctionPoolCustomCount = (auctionPoolCustomCount: number) => updateSettings({ auctionPoolCustomCount });
   const changeIconFrequency = (iconFrequency: IconFrequency) => updateSettings({ iconFrequency });
   const changeIconSurprise = (iconSurprise: boolean) => updateSettings({ iconSurprise });
   const autoBuildPool = () => socket.emit("room:autoBuildPlayerPool", { code: state.code }, response => { if (!response.ok) setError(response.error); });
@@ -852,6 +864,7 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
   const toggleReady = () => socket.emit("room:ready", { code: state.code, ready: !me.ready }, response => { if (!response.ok) setError(response.error); });
   const start = () => socket.emit("game:start", { code: state.code }, response => { if (!response.ok) setError(response.error); });
   const poolModeLabel = state.settings.playerPoolMode === "mixed" ? "GENERATIONS" : state.settings.playerPoolMode === "icons" ? "ICONS" : state.settings.playerPoolMode === "custom" ? "CUSTOM" : "CURRENT";
+  const poolSizeLabel = state.settings.auctionPoolSizeMode === "all" ? "ALL" : state.settings.auctionPoolSizeMode === "custom" ? `${state.settings.auctionPoolCustomCount}` : state.settings.auctionPoolSizeMode.toUpperCase();
 
   return <main className="lobby page">
     <div className="room-return-row"><button className="room-back-button" onClick={leave}><span>←</span><div><b>BACK TO GAME MENU</b><small>Leave this room safely</small></div></button></div>
@@ -873,15 +886,17 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
         {state.settings.playerPoolMode === "mixed" && <div className="mixed-options"><div><span>ICON FREQUENCY</span><div className="inline-choice">{(["low", "normal", "high"] as IconFrequency[]).map(value => <button disabled={!isHost} className={state.settings.iconFrequency === value ? "active" : ""} onClick={() => changeIconFrequency(value)} key={value}>{value.toUpperCase()}</button>)}</div></div><div><span>ICON SURPRISE</span><div className="inline-choice"><button disabled={!isHost} className={!state.settings.iconSurprise ? "active" : ""} onClick={() => changeIconSurprise(false)}>OFF</button><button disabled={!isHost} className={state.settings.iconSurprise ? "active icon" : "icon"} onClick={() => changeIconSurprise(true)}>ON</button></div></div><small>Low ≈20% icons · Normal ≈35% · High ≈50%. Surprise mode spaces icons between current-player runs.</small></div>}
         </div>
 
+        <div className="manager-limit-setting auction-pool-size-setting"><div><span>AUCTION POOL SIZE</span><b>{poolSizeLabel}</b></div><div className="auction-pool-size-grid">{AUCTION_POOL_SIZE_MODES.map(mode => <button disabled={!isHost} className={state.settings.auctionPoolSizeMode === mode.id ? "active" : ""} onClick={() => changeAuctionPoolSizeMode(mode.id)} key={mode.id}><strong>{mode.title}</strong><small>{mode.description}</small></button>)}</div>{state.settings.auctionPoolSizeMode === "custom" && <div className="custom-pool-count"><div><span>CUSTOM COUNT</span><b>{state.settings.auctionPoolCustomCount}</b></div><input disabled={!isHost} type="range" min={Math.max(1, validation.required)} max={Math.max(validation.required, validation.eligibleAvailable)} value={Math.min(Math.max(state.settings.auctionPoolCustomCount, validation.required), Math.max(validation.required, validation.eligibleAvailable))} onChange={event => changeAuctionPoolCustomCount(+event.target.value)} /><small>Cannot be lower than the minimum required to complete every squad.</small></div>}<small>{state.settings.auctionPoolSizeMode === "all" ? `Every one of the ${validation.eligibleAvailable} eligible footballers will enter the server auction queue.` : `Target queue: ${validation.target} footballers from ${validation.eligibleAvailable} eligible.`}</small></div>
+
         <div className="manager-limit-setting difficulty-setting"><div><span>AI DIFFICULTY</span><b>{state.settings.botDifficulty.toUpperCase()}</b></div><div className="preset-buttons difficulty-buttons">{BOT_DIFFICULTIES.map(level => <button disabled={!isHost || !state.isSolo} className={state.settings.botDifficulty === level ? "active" : ""} onClick={() => changeBotDifficulty(level)} key={level}>{level}</button>)}</div><small>{state.isSolo ? "Higher levels value OVR, player type, positional needs and budget timing more accurately." : "AI difficulty is used in Solo Practice rooms."}</small></div>
         <div className="manager-limit-setting"><div><span>ROOM CAPACITY</span><b>{state.settings.managerLimit} MANAGERS</b></div><div className="preset-buttons compact-presets">{MANAGER_LIMITS.map(limit => <button disabled={!isHost || (!state.isSolo && limit < state.managers.length)} className={state.settings.managerLimit === limit ? "active" : ""} onClick={() => changeManagerLimit(limit)} key={limit}>{limit}</button>)}</div><small>{state.isSolo ? "AI managers are added automatically." : "Rooms support a minimum of 2 and maximum of 8 managers."}</small></div>
         <div className="manager-limit-setting squad-size-setting"><div><span>STARTERS</span><b>{starterCount} PLAYERS</b></div><div className="preset-buttons squad-size-buttons">{SQUAD_SIZES.map(size => <button disabled={!isHost} className={state.settings.squadSize === size ? "active" : ""} onClick={() => changeSquadSize(size)} key={size}>{size}</button>)}</div><small>Choose the starting formation size. Full-size football uses 11 starters.</small></div>
         <div className="manager-limit-setting substitute-setting"><div><span>SUBSTITUTES</span><b>{substituteCount} SUB{substituteCount === 1 ? "" : "S"}</b></div><div className="preset-buttons substitute-buttons">{SUBSTITUTE_COUNTS.map(count => <button disabled={!isHost} className={substituteCount === count ? "active" : ""} onClick={() => changeSubstituteCount(count)} key={count}>{count}</button>)}</div><small>Total squad size is {totalSquadSize} per manager.</small></div>
         <div className="manager-limit-setting reauction-setting"><div><span>RE-AUCTION UNSOLD</span><b>{state.settings.reauctionUnsold ? "ON" : "OFF"}</b></div><div className="preset-buttons pricing-mode-buttons"><button disabled={!isHost} className={!state.settings.reauctionUnsold ? "active" : ""} onClick={() => changeReauctionUnsold(false)}><strong>Off</strong><small>Skipped footballers never return.</small></button><button disabled={!isHost} className={state.settings.reauctionUnsold ? "active" : ""} onClick={() => changeReauctionUnsold(true)}><strong>On</strong><small>Unsold players return only after the normal pool ends.</small></button></div></div>
 
-        <div className={`pool-summary ${state.poolSelectionValid ? "valid" : "invalid"}`}><div><span>SELECTED AUCTION POOL</span><strong>{validation.selected} / {validation.required} minimum</strong></div><div className="pool-type-counts"><span>CURRENT <b>{validation.selectedCurrent}</b></span><span>ICONS <b>{validation.selectedIcons}</b></span><span>RECOMMENDED <b>{validation.recommended}</b></span><span>AVAILABLE <b>{validation.eligibleAvailable}</b></span></div><div className="pool-counts">{POSITIONS.map(position => <span key={position}>{position} <b>{counts[position]}</b></span>)}</div><div className="pool-actions"><button onClick={() => setPoolOpen(true)}>{isHost && state.settings.playerPoolMode === "custom" ? "CUSTOMIZE PLAYERS" : "VIEW PLAYERS"}</button>{isHost && <button className="auto-pool" onClick={autoBuildPool}>{state.settings.playerPoolMode === "custom" ? "RANDOM BALANCED" : "REBUILD BALANCED POOL"}</button>}</div></div>
+        <div className={`pool-summary ${state.poolSelectionValid ? "valid" : "invalid"}`}><div><span>SELECTED AUCTION POOL</span><strong>{validation.selected} / {validation.required} minimum</strong></div><div className="pool-type-counts"><span>CURRENT <b>{validation.selectedCurrent}</b></span><span>ICONS <b>{validation.selectedIcons}</b></span><span>TARGET <b>{validation.target}</b></span><span>ELIGIBLE <b>{validation.eligibleAvailable}</b></span></div><div className="pool-counts">{POSITIONS.map(position => <span key={position}>{position} <b>{counts[position]}</b></span>)}</div><div className="pool-actions"><button onClick={() => setPoolOpen(true)}>{isHost && state.settings.playerPoolMode === "custom" ? "CUSTOMIZE PLAYERS" : "VIEW PLAYERS"}</button>{isHost && <button className="auto-pool" onClick={autoBuildPool}>{state.settings.playerPoolMode === "custom" ? "RANDOM BALANCED" : "REBUILD BALANCED POOL"}</button>}</div></div>
 
-        <div className="prematch-summary"><div className="setting-heading"><span>AUCTION SETTINGS</span><b>READY CHECK</b></div><div className="summary-grid"><span>Managers<b>{state.managers.length}</b></span><span>Starters<b>{starterCount}</b></span><span>Subs<b>{substituteCount}</b></span><span>Squad<b>{totalSquadSize}</b></span><span>Player pool<b>{poolModeLabel}</b></span><span>Selected<b>{validation.selected}</b></span><span>Minimum<b>{validation.required}</b></span><span>Recommended<b>{validation.recommended}</b></span><span>Timer<b>{state.settings.auctionSeconds}s</b></span><span>Budget<b>{state.settings.startingBudget}M</b></span><span>Opponent budgets<b>PRIVATE</b></span>{state.settings.playerPoolMode === "mixed" && <span>Icons<b>{state.settings.iconFrequency.toUpperCase()}</b></span>}</div></div>
+        <div className="prematch-summary"><div className="setting-heading"><span>AUCTION SETTINGS</span><b>READY CHECK</b></div><div className="summary-grid"><span>Managers<b>{state.managers.length}</b></span><span>Starters<b>{starterCount}</b></span><span>Subs<b>{substituteCount}</b></span><span>Squad<b>{totalSquadSize}</b></span><span>Player pool<b>{poolModeLabel}</b></span><span>Eligible<b>{validation.eligibleAvailable}</b></span><span>Auction queue<b>{validation.selected}</b></span><span>Minimum<b>{validation.required}</b></span><span>Pool size<b>{poolSizeLabel}</b></span><span>Timer<b>{state.settings.auctionSeconds}s</b></span><span>Budget<b>{state.settings.startingBudget}M</b></span><span>Opponent budgets<b>PRIVATE</b></span>{state.settings.playerPoolMode === "mixed" && <span>Icons<b>{state.settings.iconFrequency.toUpperCase()}</b></span>}</div></div>
 
         {(validation.errors.length > 0 || validation.warnings.length > 0) && <div className="pool-validation-list">{validation.errors.map(message => <p className="error" key={message}>✕ {message}</p>)}{validation.warnings.map(message => <p className="warning" key={message}>! {message}</p>)}</div>}
         <div className="capacity-meter unique"><span>{state.poolSelectionValid ? "Auction pool ready" : "Player pool needs attention"}</span><b>{validation.selected} selected / {validation.required} minimum</b><small>{state.managers.length} manager{state.managers.length === 1 ? "" : "s"} × ({starterCount} starters + {substituteCount} subs) = {validation.required} minimum unique footballers. The recommended pool adds variety while preserving positional coverage.</small></div>
@@ -899,12 +914,13 @@ function PlayerPoolModal({ socket, state, isHost, onClose, setError }: { socket:
   const [roleFilter, setRoleFilter] = useState<"ALL" | LineupRole>("ALL");
   const [minOvr, setMinOvr] = useState(70);
   const [query, setQuery] = useState("");
-  const [draft, setDraft] = useState<string[]>(state.selectedFootballerIds);
-  const [saving, setSaving] = useState(false);
   const editable = isHost && state.settings.playerPoolMode === "custom";
+  const initialDraft = editable ? state.customPlayerIds : state.selectedFootballerIds;
+  const [draft, setDraft] = useState<string[]>(initialDraft);
+  const [saving, setSaving] = useState(false);
   const roles: LineupRole[] = ["GK", "LB", "CB", "RB", "LWB", "RWB", "CDM", "CM", "CAM", "LM", "RM", "LW", "RW", "CF", "ST"];
 
-  useEffect(() => { setDraft(state.selectedFootballerIds); }, [state.selectedFootballerIds]);
+  useEffect(() => { setDraft(editable ? state.customPlayerIds : state.selectedFootballerIds); }, [editable, state.customPlayerIds, state.selectedFootballerIds]);
   const counts = useMemo(() => countPool(state.availableFootballers, draft), [state.availableFootballers, draft]);
   const selectedSet = useMemo(() => new Set(draft), [draft]);
   const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -925,6 +941,10 @@ function PlayerPoolModal({ socket, state, isHost, onClose, setError }: { socket:
     const ids = state.availableFootballers.filter(player => (player.playerType ?? "CURRENT") === playerType).map(player => player.id);
     setDraft(current => [...new Set([...current, ...ids])]);
   };
+  const selectAll = () => {
+    if (!editable) return;
+    setDraft(state.availableFootballers.map(player => player.id));
+  };
   const autoBuild = () => {
     if (!isHost) return;
     setSaving(true);
@@ -943,21 +963,22 @@ function PlayerPoolModal({ socket, state, isHost, onClose, setError }: { socket:
   };
   const selectedCurrent = state.availableFootballers.filter(player => selectedSet.has(player.id) && (player.playerType ?? "CURRENT") === "CURRENT").length;
   const selectedIcons = state.availableFootballers.filter(player => selectedSet.has(player.id) && player.playerType === "ICON").length;
-  const required = getMinimumFootballersRequired(state.managers.length, state.settings.squadSize, state.settings.substituteCount);
+  const required = getMinimumFootballersRequired(state.settings.managerLimit, state.settings.squadSize, state.settings.substituteCount);
 
   return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Select room footballers"><section className="pool-modal expanded-pool-modal"><header><div><div className="eyebrow">{editable ? "CUSTOM PLAYER DRAFT" : "PLAYER DATABASE"}</div><h2>{editable ? "Build your auction pool" : "Explore this room’s pool"}</h2><p>{editable ? "Combine current stars and football icons. The server checks uniqueness and positional balance before kickoff." : "Search the catalogue and inspect every eligible footballer. Switch the room to Custom to edit the selection."}</p></div><button className="modal-close" onClick={onClose}>×</button></header>
-    <div className="pool-library-summary"><span>SELECTED <b>{draft.length}</b></span><span>REQUIRED <b>{required}</b></span><span>CURRENT <b>{selectedCurrent}</b></span><span>ICONS <b>{selectedIcons}</b></span><span>SHOWING <b>{visible.length}</b></span></div>
+    <div className="pool-library-summary"><span>{editable ? "ELIGIBLE" : "SELECTED"} <b>{draft.length}</b></span><span>AUCTION QUEUE <b>{state.poolValidation.selected}</b></span><span>REQUIRED <b>{required}</b></span><span>CURRENT <b>{selectedCurrent}</b></span><span>ICONS <b>{selectedIcons}</b></span><span>SHOWING <b>{visible.length}</b></span></div>
     <div className="custom-pool-tools">
       <div className="position-tabs all-position-tabs"><button className={active === "ALL" ? "active" : ""} onClick={() => setActive("ALL")}><span>ALL</span><b>{draft.length}</b></button>{POSITIONS.map(position => <button className={active === position ? "active" : ""} key={position} onClick={() => setActive(position)}><span>{position}</span><b>{counts[position]}</b></button>)}</div>
       <input className="pool-search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search player, country, club or position…" />
       <div className="pool-filter-row"><label><span>TYPE</span><select value={typeFilter} onChange={event => setTypeFilter(event.target.value as "ALL" | "CURRENT" | "ICON")}><option value="ALL">Current + Icons</option><option value="CURRENT">Current</option><option value="ICON">Icons</option></select></label><label><span>ROLE</span><select value={roleFilter} onChange={event => setRoleFilter(event.target.value as "ALL" | LineupRole)}><option value="ALL">All roles</option>{roles.map(role => <option value={role} key={role}>{role}</option>)}</select></label><label><span>MIN OVR · {minOvr}</span><input type="range" min="70" max="99" value={minOvr} onChange={event => setMinOvr(+event.target.value)} /></label></div>
-      {isHost && <div className="custom-pool-actions"><button disabled={!editable || saving} onClick={() => addType("CURRENT")}>Select All Current</button><button disabled={!editable || saving} className="icon-action" onClick={() => addType("ICON")}>Select All Icons</button><button disabled={!editable || saving} onClick={() => setDraft([])}>Clear Selection</button><button disabled={saving} onClick={autoBuild}>Random Balanced Selection</button></div>}
+      {isHost && <div className="custom-pool-actions"><button disabled={!editable || saving} onClick={selectAll}>Select All</button><button disabled={!editable || saving} onClick={() => addType("CURRENT")}>All Current</button><button disabled={!editable || saving} className="icon-action" onClick={() => addType("ICON")}>All Icons</button><button disabled={!editable || saving} onClick={() => setDraft([])}>Clear All</button><button disabled={saving} onClick={autoBuild}>Random Balanced</button></div>}
     </div>
     <div className="pool-grid custom-pool-grid">{visible.map(player => {
       const selected = selectedSet.has(player.id);
       const type = player.playerType ?? "CURRENT";
-      const playerRoles = getFootballerRoles(player);
-      return <button type="button" disabled={!editable} onClick={() => toggle(player)} className={`pool-player ${selected ? "selected" : ""} ${type === "ICON" ? "icon-player" : ""}`} key={player.id}><FootballerPhoto player={player} compact /><span className="selection-mark">{selected ? "✓" : editable ? "+" : "·"}</span><div><div className="pool-player-heading"><strong>{player.name}</strong><span className={`player-type-chip ${type === "ICON" ? "icon" : "current"}`}>{type}</span></div><small>{player.country} • {playerRoles[0] ?? player.position}{playerRoles.length > 1 ? ` • +${playerRoles.length - 1} roles` : ""}</small><span>OVR {player.overall} • Opens {money(getOpeningBid(state.settings, player))}</span></div></button>;
+      const primaryRoles = getFootballerPrimaryRoles(player);
+      const secondaryRoles = getFootballerSecondaryRoles(player);
+      return <button type="button" disabled={!editable} onClick={() => toggle(player)} className={`pool-player ${selected ? "selected" : ""} ${type === "ICON" ? "icon-player" : ""}`} key={player.id}><FootballerPhoto player={player} compact /><span className="selection-mark">{selected ? "✓" : editable ? "+" : "·"}</span><div><div className="pool-player-heading"><strong>{player.name}</strong><span className={`player-type-chip ${type === "ICON" ? "icon" : "current"}`}>{type}</span></div><small>{player.country} • Primary {primaryRoles.join(" / ")}{secondaryRoles.length ? ` • Secondary ${secondaryRoles.join(" / ")}` : ""}</small><span>OVR {player.overall} • Opens {money(getOpeningBid(state.settings, player))}</span></div></button>;
     })}</div>
     <footer><div className={draft.length >= required ? "complete" : "incomplete"}>{draft.length >= required ? `✓ ${draft.length} selected · server will verify positional balance` : `Add at least ${required - draft.length} more footballer${required - draft.length === 1 ? "" : "s"}`}</div><div><button className="secondary" onClick={onClose}>Cancel</button>{isHost && <button className="primary" disabled={saving || (editable && draft.length === 0)} onClick={save}>{saving ? "Saving…" : editable ? "Save custom pool" : "Done"}</button>}</div></footer>
   </section></div>;
@@ -1021,11 +1042,13 @@ const FormationClock = React.memo(function FormationClock({ endsAt }: { endsAt: 
 });
 
 const PlayerCard = React.memo(function PlayerCard({ player, iconSurprise = false }: { player: Footballer; iconSurprise?: boolean }) {
-  const roles = getFootballerRoles(player);
+  const primaryRoles = getFootballerPrimaryRoles(player);
+  const secondaryRoles = getFootballerSecondaryRoles(player);
+  const roles = [...primaryRoles, ...secondaryRoles];
   const type = player.playerType ?? "CURRENT";
   return <motion.div key={player.id} initial={{ opacity: 0, scale: .94, y: 24 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: .45, ease: [0.22, 1, 0.36, 1] }} className={`player-card rarity-${player.rarity.toLowerCase()} ${type === "ICON" ? "player-type-icon" : "player-type-current"}`}>
     {type === "ICON" && iconSurprise && <div className="icon-surprise-banner">★ ICON ENTERS THE AUCTION</div>}
-    <div className="card-top"><span>{type === "ICON" ? "ICON" : player.rarity}</span><b>{roles[0] ?? player.position}</b></div><div className="rating">{player.overall}</div><FootballerPhoto player={player} /><h2>{player.name}</h2><p>{player.country} · {type === "ICON" ? "Football legend" : "Current footballer"}</p><div className="player-type-line"><span className={`player-type-chip ${type === "ICON" ? "icon" : "current"}`}>{type}</span><span>PRIMARY {roles[0] ?? player.position}</span>{roles.length > 1 && <span>SUPPORTS {roles.slice(1).join(" · ")}</span>}</div><div className="player-roles" aria-label="Playable positions">{roles.map((role, index) => <span className={index === 0 ? "primary" : ""} key={role}>{role}</span>)}</div><div className="stats"><Stat value={player.pace} label="PAC" /><Stat value={player.shooting} label="SHO" /><Stat value={player.passing} label="PAS" /><Stat value={player.dribbling} label="DRI" /><Stat value={player.defending} label="DEF" /><Stat value={player.physical} label="PHY" /></div><div className="trait">✦ {player.trait}</div>
+    <div className="card-top"><span>{type === "ICON" ? "ICON" : player.rarity}</span><b>{primaryRoles.join(" / ")}</b></div><div className="rating">{player.overall}</div><FootballerPhoto player={player} /><h2>{player.name}</h2><p>{player.country} · {type === "ICON" ? "Football legend" : "Current footballer"}</p><div className="player-type-line"><span className={`player-type-chip ${type === "ICON" ? "icon" : "current"}`}>{type}</span><span>PRIMARY {primaryRoles.join(" · ")}</span>{secondaryRoles.length > 0 && <span>SECONDARY {secondaryRoles.join(" · ")}</span>}</div><div className="player-roles" aria-label="Playable positions">{roles.map(role => <span className={primaryRoles.includes(role) ? "primary" : ""} key={role}>{role}</span>)}</div><div className="stats"><Stat value={player.pace} label="PAC" /><Stat value={player.shooting} label="SHO" /><Stat value={player.passing} label="PAS" /><Stat value={player.dribbling} label="DRI" /><Stat value={player.defending} label="DEF" /><Stat value={player.physical} label="PHY" /></div><div className="trait">✦ {player.trait}</div>
   </motion.div>;
 });
 
@@ -1142,7 +1165,7 @@ function rolePosition(role: LineupRole): Position {
 function clientRoleScore(player: Footballer, role: LineupRole): number {
   const required = rolePosition(role);
   const roles = getFootballerRoles(player);
-  const position = player.primaryRole === role ? 100 : roles.includes(role) ? 98 : player.position === required ? 72 : player.secondary.includes(required) ? 58 : 22;
+  const position = getFootballerPrimaryRoles(player).includes(role) ? 100 : roles.includes(role) ? 98 : player.position === required ? 72 : player.secondary.includes(required) ? 58 : 22;
   let ability = player.overall;
   if (role === "GK") ability = player.goalkeeping;
   else if (["LB", "CB", "RB", "LWB", "RWB"].includes(role)) ability = player.defending * .45 + player.physical * .25 + player.pace * .18 + player.passing * .12;
@@ -1316,7 +1339,7 @@ function FormationRoom({ socket, state, managerId, setError, leave }: { socket: 
       const player = playerMap.get(footballerId);
       const role = roleForSlot(target.dataset.slotId);
       if (!player || !role) return "invalid";
-      return player.primaryRole === role ? "valid" : getFootballerRoles(player).includes(role) ? "secondary" : "valid";
+      return getFootballerPrimaryRoles(player).includes(role) ? "valid" : getFootballerRoles(player).includes(role) ? "secondary" : "valid";
     }
     if (target.dataset.benchPlayerId) {
       const sourceSlot = findPlayerSlot(footballerId);
@@ -1494,10 +1517,10 @@ function FormationRoom({ socket, state, managerId, setError, leave }: { socket: 
         const player = playerMap.get(picks[formationSlot.id] ?? "");
         const fit = player ? getRoleFitLabel(player, formationSlot.role) : null;
         const selected = player ? selectedPlayerId === player.id : false;
-        return <button type="button" data-slot-id={formationSlot.id} onClick={() => { if (selectedPlayerId && !player) { if (movePlayerToSlot(selectedPlayerId, formationSlot.id)) setSelectedPlayerId(null); } }} className={`pitch-player ${draggingPlayer ? (canUseInSlot(draggingPlayer, formationSlot.id) ? "drag-target drag-valid" : "drag-target drag-invalid") : ""}`} style={{ left: `${formationSlot.x}%`, top: `${formationSlot.y}%` }} key={formationSlot.id}><span className="role-badge">{formationSlot.role}</span>{draggingPlayer && <span className="drag-preview">{Math.round(clientRoleScore(playerMap.get(draggingPlayer)!, formationSlot.role))}</span>}{player ? <div {...dragProps(player.id)} className={`pitch-player-content formation-drag-card ${selected ? "selected" : ""}`} key={player.id}><FootballerPhoto key={player.id} player={player} compact /><strong>{player.name.split(" ").at(-1)}</strong><small><b>{player.primaryRole}</b>{player.secondaryRoles.length ? ` · ${player.secondaryRoles.join("/")}` : ""} · {player.overall} OVR</small><em className={`fit-${fit?.toLowerCase().replaceAll(" ", "-")}`}>{fit}</em><i className="drag-grip" aria-hidden="true">⋮⋮</i></div> : <b>+</b>}</button>;
+        return <button type="button" data-slot-id={formationSlot.id} onClick={() => { if (selectedPlayerId && !player) { if (movePlayerToSlot(selectedPlayerId, formationSlot.id)) setSelectedPlayerId(null); } }} className={`pitch-player ${draggingPlayer ? (canUseInSlot(draggingPlayer, formationSlot.id) ? "drag-target drag-valid" : "drag-target drag-invalid") : ""}`} style={{ left: `${formationSlot.x}%`, top: `${formationSlot.y}%` }} key={formationSlot.id}><span className="role-badge">{formationSlot.role}</span>{draggingPlayer && <span className="drag-preview">{Math.round(clientRoleScore(playerMap.get(draggingPlayer)!, formationSlot.role))}</span>}{player ? <div {...dragProps(player.id)} className={`pitch-player-content formation-drag-card ${selected ? "selected" : ""}`} key={player.id}><FootballerPhoto key={player.id} player={player} compact /><strong>{player.name.split(" ").at(-1)}</strong><small><b>{getFootballerPrimaryRoles(player).join("/")}</b>{getFootballerSecondaryRoles(player).length ? ` · ${getFootballerSecondaryRoles(player).join("/")}` : ""} · {player.overall} OVR</small><em className={`fit-${fit?.toLowerCase().replaceAll(" ", "-")}`}>{fit}</em><i className="drag-grip" aria-hidden="true">⋮⋮</i></div> : <b>+</b>}</button>;
       })}</div><div className="assembly-note">Tap a player then tap another to swap. Dragging uses a lightweight overlay, so the full lineup is updated only once when you drop.</div></section>
-      <aside className={`panel bench-panel ${draggingPlayer ? "is-dragging" : ""}`} data-bench-drop><div className="panel-title"><h2>{substituteTarget ? "Substitutes" : "Squad"}</h2><span>{substitutes.length}/{substituteTarget}</span></div><div className="bench-list">{substitutes.length ? substitutes.map(entry => <button {...dragProps(entry.footballer.id)} type="button" data-bench-player-id={entry.footballer.id} className={`formation-drag-card ${selectedPlayerId === entry.footballer.id ? "selected" : ""}`} key={entry.footballer.id}><FootballerPhoto key={entry.footballer.id} player={entry.footballer} compact /><div><strong>{entry.footballer.name}</strong><span><b>{entry.footballer.primaryRole}</b>{entry.footballer.secondaryRoles.length ? ` · ${entry.footballer.secondaryRoles.join("/")}` : ""} · {entry.footballer.overall} OVR</span></div><i className="drag-grip" aria-hidden="true">⋮⋮</i></button>) : <div className="no-subs">No substitutes are currently available.</div>}</div><div className="lineup-summary"><span>Starters</span><b>{Object.values(picks).length}/{starterTarget}</b><span>Substitutes</span><b>{substitutes.length}/{substituteTarget}</b></div><button className="primary submit-lineup" disabled={submitting || Object.values(picks).length !== starterTarget || substitutes.length !== substituteTarget} onClick={submit}>{submitting ? "LOCKING…" : "READY · LOCK LINEUP"}</button>{state.isSolo && <button className="danger-outline" onClick={quitSolo}>Quit Solo Match</button>}</aside></div>
-    {dragged && <div ref={overlayRef} className="touch-drag-ghost formation-drag-overlay"><FootballerPhoto player={dragged} compact /><div><b>{dragged.primaryRole}</b><span>{dragged.name}</span></div><em>{dragged.overall}</em></div>}
+      <aside className={`panel bench-panel ${draggingPlayer ? "is-dragging" : ""}`} data-bench-drop><div className="panel-title"><h2>{substituteTarget ? "Substitutes" : "Squad"}</h2><span>{substitutes.length}/{substituteTarget}</span></div><div className="bench-list">{substitutes.length ? substitutes.map(entry => <button {...dragProps(entry.footballer.id)} type="button" data-bench-player-id={entry.footballer.id} className={`formation-drag-card ${selectedPlayerId === entry.footballer.id ? "selected" : ""}`} key={entry.footballer.id}><FootballerPhoto key={entry.footballer.id} player={entry.footballer} compact /><div><strong>{entry.footballer.name}</strong><span><b>{getFootballerPrimaryRoles(entry.footballer).join("/")}</b>{getFootballerSecondaryRoles(entry.footballer).length ? ` · ${getFootballerSecondaryRoles(entry.footballer).join("/")}` : ""} · {entry.footballer.overall} OVR</span></div><i className="drag-grip" aria-hidden="true">⋮⋮</i></button>) : <div className="no-subs">No substitutes are currently available.</div>}</div><div className="lineup-summary"><span>Starters</span><b>{Object.values(picks).length}/{starterTarget}</b><span>Substitutes</span><b>{substitutes.length}/{substituteTarget}</b></div><button className="primary submit-lineup" disabled={submitting || Object.values(picks).length !== starterTarget || substitutes.length !== substituteTarget} onClick={submit}>{submitting ? "LOCKING…" : "READY · LOCK LINEUP"}</button>{state.isSolo && <button className="danger-outline" onClick={quitSolo}>Quit Solo Match</button>}</aside></div>
+    {dragged && <div ref={overlayRef} className="touch-drag-ghost formation-drag-overlay"><FootballerPhoto player={dragged} compact /><div><b>{getFootballerPrimaryRoles(dragged).join("/")}</b><span>{dragged.name}</span></div><em>{dragged.overall}</em></div>}
   </main>;
 }
 function RoomChat({ socket, state, managerId, setError }: { socket: GameSocket; state: RoomState; managerId: string; setError: (value: string) => void }) {

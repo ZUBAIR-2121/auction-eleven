@@ -1,6 +1,7 @@
 import {
   FORMATION_BY_ID,
   FORMATIONS,
+  getFootballerPrimaryRoles,
   getFootballerRoles,
   getOpeningBid,
   getConfiguredSquadSize,
@@ -23,6 +24,8 @@ export const DEFAULT_SETTINGS: GameSettings = {
   bidIncrement: 1,
   pricingMode: "normal",
   playerPoolMode: "current",
+  auctionPoolSizeMode: "standard",
+  auctionPoolCustomCount: 60,
   iconFrequency: "normal",
   iconSurprise: false,
   auctionSeconds: 12,
@@ -94,9 +97,9 @@ function roleAbility(player: Footballer, role: LineupRole): number {
 
 export function calculatePlayerSlotFit(player: Footballer, role: LineupRole): number {
   const required = rolePosition(role);
+  const primaryRoles = getFootballerPrimaryRoles(player);
   const playableRoles = getFootballerRoles(player);
-  const primaryRole = playableRoles[0];
-  const positionScore = primaryRole === role ? 100 : playableRoles.includes(role) ? 98 : player.position === required ? 72 : player.secondary.includes(required) ? 58 : 22;
+  const positionScore = primaryRoles.includes(role) ? 100 : playableRoles.includes(role) ? 98 : player.position === required ? 72 : player.secondary.includes(required) ? 58 : 22;
   return clamp(roleAbility(player, role) * .68 + positionScore * .32);
 }
 

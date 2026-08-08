@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getFootballerPrimaryRoles, getFootballerRoles, getFootballerSecondaryRoles, getRoleFitLabel } from "@auction-eleven/shared";
 import { FOOTBALLERS, FOOTBALLER_BY_CANONICAL_ID, canonicalizeFootballerIdentity } from "../src/footballers.js";
 
 const byCanonical = (id: string) => FOOTBALLER_BY_CANONICAL_ID.get(id);
@@ -33,12 +34,35 @@ describe("supplied footballer catalogue merge", () => {
     expect(FOOTBALLERS.filter(player => player.name === "Kylian Mbappé")).toHaveLength(1);
   });
 
-  it("ships balanced icon ratings and detailed supported positions", () => {
-    expect(byCanonical("pele")).toMatchObject({ playerType: "ICON", overall: 99, primaryRole: "CF" });
+  it("ships balanced icon ratings and dual-primary supported positions", () => {
+    expect(byCanonical("pele")).toMatchObject({ playerType: "ICON", overall: 99, primaryRole: "CAM" });
     expect(byCanonical("ronaldo-nazario")).toMatchObject({ playerType: "ICON", overall: 98, primaryRole: "ST" });
-    expect(byCanonical("ruud-gullit")?.secondaryRoles).toEqual(expect.arrayContaining(["CAM", "CDM", "ST"]));
-    expect(byCanonical("paolo-maldini")?.secondaryRoles).toContain("LB");
-    expect(byCanonical("lev-yashin")?.secondaryRoles).toEqual([]);
+    const gullit = byCanonical("ruud-gullit")!;
+    expect(getFootballerPrimaryRoles(gullit)).toEqual(["CM", "CAM"]);
+    expect(getFootballerSecondaryRoles(gullit)).toEqual(expect.arrayContaining(["CDM", "ST"]));
+    expect(getRoleFitLabel(gullit, "CM")).toBe("PRIMARY");
+    expect(getRoleFitLabel(gullit, "CAM")).toBe("PRIMARY");
+    expect(getRoleFitLabel(gullit, "CDM")).toBe("SECONDARY");
+    expect(getFootballerPrimaryRoles(byCanonical("paolo-maldini")!)).toEqual(["CB", "LB"]);
+    expect(getFootballerPrimaryRoles(byCanonical("lev-yashin")!)).toEqual(["GK"]);
+    expect(getFootballerSecondaryRoles(byCanonical("lev-yashin")!)).toEqual([]);
+  });
+
+  it("keeps requested versatile stars dual-primary without making every player versatile", () => {
+    expect(getFootballerPrimaryRoles(byCanonical("lionel-messi")!)).toEqual(["RW", "CAM"]);
+    expect(getFootballerPrimaryRoles(byCanonical("cristiano-ronaldo")!)).toEqual(["ST", "LW"]);
+    expect(getFootballerPrimaryRoles(byCanonical("neymar")!)).toEqual(["LW", "CAM"]);
+    expect(getFootballerPrimaryRoles(byCanonical("kylian-mbappe")!)).toEqual(["ST", "LW"]);
+    expect(getFootballerPrimaryRoles(byCanonical("joshua-kimmich")!)).toEqual(["RB", "CDM"]);
+    expect(getFootballerPrimaryRoles(byCanonical("erling-haaland")!)).toEqual(["ST"]);
+    expect(getFootballerPrimaryRoles(byCanonical("virgil-van-dijk")!)).toEqual(["CB"]);
+  });
+
+  it("matches position filters against both primary and secondary roles", () => {
+    const gullit = byCanonical("ruud-gullit")!;
+    expect(getFootballerRoles(gullit)).toEqual(expect.arrayContaining(["CM", "CAM", "CDM", "ST"]));
+    expect(getFootballerRoles(gullit).includes("CAM")).toBe(true);
+    expect(getFootballerRoles(gullit).includes("CDM")).toBe(true);
   });
 
   it("keeps base OVR at or below 99", () => {

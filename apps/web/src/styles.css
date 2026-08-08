@@ -2574,3 +2574,58 @@ html[data-ae-performance="performance"] .touch-drag-ghost.formation-drag-overlay
   .bench-list > .formation-drag-card { animation: none !important; transition: none !important; }
 }
 .touch-drag-ghost.formation-drag-overlay * { pointer-events: none; }
+
+/* ===== v1.8 canonical pool sizing + dual-primary positions ===== */
+.auction-pool-size-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 12px;
+}
+.auction-pool-size-grid button {
+  min-height: 74px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid rgba(125,255,81,.12);
+  border-radius: 12px;
+  color: #cdd8cd;
+  background: rgba(255,255,255,.018);
+  text-align: left;
+}
+.auction-pool-size-grid button strong { font-size: 10px; }
+.auction-pool-size-grid button small { color: #748077; font-size: 7px; line-height: 1.35; }
+.auction-pool-size-grid button.active {
+  border-color: rgba(125,255,81,.42);
+  background: linear-gradient(150deg, rgba(125,255,81,.11), rgba(17,212,111,.03));
+}
+.custom-pool-count {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(125,255,81,.1);
+  border-radius: 11px;
+  background: rgba(4,10,7,.42);
+}
+.custom-pool-count > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.custom-pool-count > div span { color: #7f8a82; font-size: 8px; letter-spacing: .1em; }
+.custom-pool-count > div b { color: #d7ffd0; }
+.custom-pool-count input { width: 100%; margin: 9px 0 4px; accent-color: var(--accent-b); }
+.custom-pool-count small { color: #69736b; font-size: 7px; }
+.pool-library-summary { grid-template-columns: repeat(6, minmax(0,1fr)); }
+
+@media (max-width: 1000px) {
+  .auction-pool-size-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .pool-library-summary { grid-template-columns: repeat(3, minmax(0,1fr)); }
+}
+@media (max-width: 680px) {
+  .auction-pool-size-grid { grid-template-columns: 1fr 1fr; }
+  .auction-pool-size-grid button { min-height: 64px; }
+  .pool-library-summary { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+@media (max-width: 430px) {
+  .auction-pool-size-grid { grid-template-columns: 1fr; }
+}
+.custom-pool-actions { grid-template-columns: repeat(5, minmax(0,1fr)); }
+@media (max-width: 820px) { .custom-pool-actions { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+@media (max-width: 430px) { .custom-pool-actions { grid-template-columns: 1fr; } }

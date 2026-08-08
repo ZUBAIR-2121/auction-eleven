@@ -69,7 +69,7 @@ io.on("connection",socket=>{
   socket.on("game:start",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.start(payload.code,seat);return null;}));
   socket.on("game:quitSolo",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.quitSolo(payload.code,seat);managerId=null;roomCode=null;return null;}));
   socket.on("auction:bid",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.bid(payload.code,seat,payload.amount,payload.requestId,payload.roundId);return null;}));
-  socket.on("auction:pass",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.pass(payload.code,seat,payload.roundId);return null;}));
+  socket.on("auction:pass",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.pass(payload.code,seat,payload.requestId,payload.roundId);return null;}));
   socket.on("auction:complete",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.completeAuction(payload.code,seat);return null;}));
   socket.on("lineup:submit",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.submitLineup(payload.code,seat,payload.formationId,payload.picks);return null;}));
   socket.on("room:reaction",payload=>{try{const seat=ensureSeat(payload.code);rooms.reaction(payload.code,seat,payload.reaction);}catch{/* ignore stale/invalid reaction events */}});

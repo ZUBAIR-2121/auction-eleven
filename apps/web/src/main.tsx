@@ -994,7 +994,7 @@ function FootballerPhoto({ player, compact = false }: { player: Footballer; comp
     return () => { active = false; };
   }, [cacheKey, player, visible]);
 
-  return <div ref={containerRef} className={`footballer-photo ${compact ? "compact" : ""}`}>{photo ? <><img key={photo.url} src={photo.url} alt={`${player.name} footballer`} loading={compact ? "lazy" : "eager"} decoding="async" referrerPolicy="no-referrer" /><a href={photo.descriptionUrl} target="_blank" rel="noreferrer" title={`${photo.credit} • ${photo.license}`}>©</a></> : <div className="photo-placeholder"><span>{player.position === "GK" ? "🧤" : "⚽"}</span><small>{failed ? "PHOTO UNAVAILABLE" : visible ? "LOADING PHOTO" : "PHOTO READY"}</small></div>}</div>;
+  return <div ref={containerRef} className={`footballer-photo ${compact ? "compact" : ""}`}>{photo ? <><img key={photo.url} src={photo.url} alt={`${player.name} footballer`} loading={compact ? "lazy" : "eager"} decoding="async" referrerPolicy="no-referrer" draggable={false} /><a href={photo.descriptionUrl} target="_blank" rel="noreferrer" title={`${photo.credit} • ${photo.license}`}>©</a></> : <div className="photo-placeholder"><span>{player.position === "GK" ? "🧤" : "⚽"}</span><small>{failed ? "PHOTO UNAVAILABLE" : visible ? "LOADING PHOTO" : "PHOTO READY"}</small></div>}</div>;
 }
 
 
@@ -1096,7 +1096,7 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
   const passOnPlayer = () => {
     if (hasPassed || !state.endsAt) return;
     setSending(true);
-    socket.emit("auction:pass", { code: state.code, roundId: state.roundId }, response => {
+    socket.emit("auction:pass", { code: state.code, roundId: state.roundId, requestId: crypto.randomUUID() }, response => {
       setSending(false);
       if (!response.ok) setError(response.error);
     });
@@ -1124,7 +1124,7 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
     <div className="arena-grid"><div className="arena-left-stack"><SquadTracker squad={me.squad} currentPosition={state.currentFootballer?.position} squadSize={state.settings.squadSize} substituteCount={state.settings.substituteCount} /><aside className="panel manager-board"><h3>ROOM SQUADS</h3>{state.managers.map(manager => <div className={`manager-line ${manager.id === state.highestBidderId ? "leading" : ""} ${manager.id === managerId ? "you" : ""}`} key={manager.id}><span className="mini-avatar">{manager.avatar}</span><div><b>{manager.name}</b><small>{manager.auctionComplete ? "SQUAD COMPLETE" : `${manager.squad.length}/${maximumSquadSize} · ${Math.max(0, maximumSquadSize - manager.squad.length)} spots left`}</small></div><strong className={manager.id === managerId ? "own-budget" : "private-budget"}>{manager.id === managerId ? money(myBudget) : "PRIVATE"}</strong></div>)}</aside></div>
       <section className="auction-stage">{state.currentFootballer && <PlayerCard player={state.currentFootballer} iconSurprise={state.settings.playerPoolMode === "mixed" && state.settings.iconSurprise} />}<div className="auction-meta"><AuctionTimer endsAt={state.endsAt} durationSeconds={state.settings.auctionSeconds} /><div className="current-price"><span>{state.currentBid ? "CURRENT BID" : state.settings.pricingMode === "ovr_scaled" ? "OVR OPENING PRICE" : "OPENING BID"}</span><strong>{money(state.currentBid || openingBid)}</strong><p>{state.highestBidderId ? `${state.managers.find(manager => manager.id === state.highestBidderId)?.name} leads` : state.settings.pricingMode === "ovr_scaled" ? `${state.currentFootballer?.overall ?? "—"} OVR value mode` : "Normal price mode"}</p></div></div></section>
       <aside className="panel bid-feed"><h3>BID FEED</h3>{state.bidHistory.length === 0 ? <div className="empty-feed">No bids yet.<br />Make the first move.</div> : state.bidHistory.map((bid, index) => <div className={`feed-row ${index === 0 ? "latest" : ""}`} key={bid.id}><span>{bid.managerName}</span><b>{money(bid.amount)}</b></div>)}</aside></div>
-    <div className="bid-dock"><div className="budget-read"><span>YOUR BUDGET</span><b>{money(myBudget)}</b><small>{me.squad.length}/{maximumSquadSize} signed · {Math.max(0, maximumSquadSize - me.squad.length)} players to target · {Math.max(0, me.squad.length - starterCount)}/{state.settings.substituteCount} subs · {Math.max(0, maximumSquadSize - me.squad.length) ? Math.floor(myBudget / Math.max(1, maximumSquadSize - me.squad.length)) : myBudget}M per open slot</small></div><div className="quick-bids"><button disabled={cannotBid} onClick={() => actualBid(minimum)}>BID {money(minimum)}</button><button disabled={cannotBid || myBudget < minimum + 5} onClick={() => actualBid(minimum + 5)}>+5M</button><button disabled={cannotBid || myBudget < minimum + 10} onClick={() => actualBid(minimum + 10)}>+10M</button><button type="button" className={`pass-player ${hasPassed ? "passed" : ""}`} disabled={sending || me.auctionComplete || hasPassed || !state.endsAt || me.squad.length >= maximumSquadSize || myBudget < openingBid} onClick={passOnPlayer}>{hasPassed ? "PASSED" : "PASS PLAYER"}</button><button type="button" className={`complete-auction ${me.auctionComplete ? "done" : ""}`} disabled={sending || !canComplete} onClick={completeSquad}>{me.auctionComplete ? "SQUAD COMPLETE ✓" : `I'M DONE (${me.squad.length}/${maximumSquadSize})`}</button></div><form className="custom-bid" onSubmit={event => { event.preventDefault(); if (custom) actualBid(+custom); }}><input inputMode="numeric" enterKeyHint="send" aria-label="Custom bid amount" value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ""))} placeholder="CUSTOM BID" /><button type="submit" disabled={cannotBid || !custom || +custom > myBudget}>PLACE</button></form></div></main>;
+    <div className="bid-dock"><div className="budget-read"><span>YOUR BUDGET</span><b>{money(myBudget)}</b><small>{me.squad.length}/{maximumSquadSize} signed · {Math.max(0, maximumSquadSize - me.squad.length)} players to target · {Math.max(0, me.squad.length - starterCount)}/{state.settings.substituteCount} subs · {Math.max(0, maximumSquadSize - me.squad.length) ? Math.floor(myBudget / Math.max(1, maximumSquadSize - me.squad.length)) : myBudget}M per open slot</small></div><div className="quick-bids"><button disabled={cannotBid} onClick={() => actualBid(minimum)}>BID {money(minimum)}</button><button disabled={cannotBid || myBudget < minimum + 5} onClick={() => actualBid(minimum + 5)}>+5M</button><button disabled={cannotBid || myBudget < minimum + 10} onClick={() => actualBid(minimum + 10)}>+10M</button><button type="button" className={`pass-player ${hasPassed ? "passed" : ""}`} disabled={sending || me.auctionComplete || hasPassed || !state.endsAt || me.squad.length >= maximumSquadSize || myBudget < openingBid} onClick={passOnPlayer}>{hasPassed ? "PASSED · WAITING" : "PASS PLAYER"}</button><button type="button" className={`complete-auction ${me.auctionComplete ? "done" : ""}`} disabled={sending || !canComplete} onClick={completeSquad}>{me.auctionComplete ? "SQUAD COMPLETE ✓" : `I'M DONE (${me.squad.length}/${maximumSquadSize})`}</button></div><form className="custom-bid" onSubmit={event => { event.preventDefault(); if (custom) actualBid(+custom); }}><input inputMode="numeric" enterKeyHint="send" aria-label="Custom bid amount" value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ""))} placeholder="CUSTOM BID" /><button type="submit" disabled={cannotBid || !custom || +custom > myBudget}>PLACE</button></form></div></main>;
 }
 
 function RoundResult({ state }: { state: RoomState }) {
@@ -1175,22 +1175,40 @@ function FormationRoom({ socket, state, managerId, setError, leave }: { socket: 
   const [picks, setPicks] = useState<Record<string, string>>(() => me.lineup.length ? Object.fromEntries(me.lineup.map(item => [item.slotId, item.footballerId])) : autoArrange(me.squad, FORMATION_BY_ID.get(initialFormation)!));
   const [submitting, setSubmitting] = useState(false);
   const [draggingPlayer, setDraggingPlayer] = useState<string | null>(null);
-  const [dragPoint, setDragPoint] = useState<{ x: number; y: number } | null>(null);
-  const pointerDrag = useRef<{ id: string; pointerId: number; startX: number; startY: number; active: boolean; timer: number | null } | null>(null);
+  const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
   const formation = FORMATION_BY_ID.get(formationId) ?? validFormations[0]!;
   const playerMap = useMemo(() => new Map(me.squad.map(entry => [entry.footballer.id, entry.footballer])), [me.squad]);
   const draftKey = `ae_formation_${state.code}_${managerId}`;
   const restoredDraft = useRef(false);
+  const picksRef = useRef(picks);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const pointerDrag = useRef<{
+    id: string;
+    pointerId: number;
+    pointerType: string;
+    startX: number;
+    startY: number;
+    active: boolean;
+    timer: number | null;
+    element: HTMLElement;
+  } | null>(null);
+  const animationFrame = useRef<number | null>(null);
+  const latestPointer = useRef({ x: 0, y: 0, pointerType: "touch" });
+  const hoverTarget = useRef<HTMLElement | null>(null);
+  const suppressTapUntil = useRef(0);
+
+  useEffect(() => { picksRef.current = picks; }, [picks]);
 
   useEffect(() => {
     if (restoredDraft.current || me.lineupSubmitted) return;
     restoredDraft.current = true;
     try {
       const saved = JSON.parse(localStorage.getItem(draftKey) ?? "null") as { formationId?: string; picks?: Record<string, string> } | null;
-      const savedFormation = saved?.formationId ? FORMATION_BY_ID.get(saved.formationId) : undefined;
-      if (savedFormation?.slots.length === starterTarget && saved?.picks) {
-        const validPicks = Object.fromEntries(Object.entries(saved.picks).filter(([slotId, footballerId]) => savedFormation.slots.some(slot => slot.id === slotId) && playerMap.has(footballerId)));
-        setFormationId(savedFormation.id);
+      const storedFormation = saved?.formationId ? FORMATION_BY_ID.get(saved.formationId) : undefined;
+      if (storedFormation?.slots.length === starterTarget && saved?.picks) {
+        const validPicks = Object.fromEntries(Object.entries(saved.picks).filter(([slotId, footballerId]) => storedFormation.slots.some(slot => slot.id === slotId) && playerMap.has(footballerId)));
+        picksRef.current = validPicks;
+        setFormationId(storedFormation.id);
         setPicks(validPicks);
       }
     } catch { localStorage.removeItem(draftKey); }
@@ -1201,150 +1219,258 @@ function FormationRoom({ socket, state, managerId, setError, leave }: { socket: 
   }, [draftKey, formationId, picks, me.lineupSubmitted]);
 
   const lineupIds = useMemo(() => new Set(Object.values(picks)), [picks]);
-  const substitutes = me.squad.filter(entry => !lineupIds.has(entry.footballer.id));
+  const substitutes = useMemo(() => me.squad.filter(entry => !lineupIds.has(entry.footballer.id)), [lineupIds, me.squad]);
   const selectedManagerCount = state.managers.filter(manager => manager.lineupSubmitted).length;
-  const roleForSlot = (slotId: string) => formation.slots.find(item => item.id === slotId)?.role;
-  const canUseInSlot = (footballerId: string, slotId: string) => {
+  const roleForSlot = React.useCallback((slotId: string) => formation.slots.find(item => item.id === slotId)?.role, [formation.slots]);
+  const canUseInSlot = React.useCallback((footballerId: string, slotId: string) => {
     const player = playerMap.get(footballerId);
     const slotRole = roleForSlot(slotId);
     if (!player || !slotRole) return false;
     return slotRole === "GK" ? player.position === "GK" : player.position !== "GK";
-  };
+  }, [playerMap, roleForSlot]);
+  const findPlayerSlot = React.useCallback((footballerId: string, draft = picksRef.current) => Object.entries(draft).find(([, id]) => id === footballerId)?.[0], []);
+
+  const commitPicks = React.useCallback((next: Record<string, string>) => {
+    picksRef.current = next;
+    setPicks(next);
+  }, []);
 
   const chooseFormation = (nextId: string) => {
     const next = FORMATION_BY_ID.get(nextId);
     if (!next || next.slots.length !== starterTarget) return;
+    const arranged = autoArrange(me.squad, next);
+    picksRef.current = arranged;
+    setSelectedPlayerId(null);
     setFormationId(nextId);
-    setPicks(autoArrange(me.squad, next));
+    setPicks(arranged);
   };
 
-  const movePlayerToSlot = (footballerId: string, targetSlotId: string) => {
+  /** One atomic draft update for starter↔starter, bench→starter, or empty-slot moves. */
+  const movePlayerToSlot = React.useCallback((footballerId: string, targetSlotId: string): boolean => {
     if (!canUseInSlot(footballerId, targetSlotId)) {
       setError(roleForSlot(targetSlotId) === "GK" ? "Only a goalkeeper can fill the GK slot." : "Goalkeepers cannot be placed in outfield positions.");
-      return;
+      return false;
     }
-    setPicks(current => {
-      const next = { ...current };
-      const sourceSlot = Object.entries(next).find(([, id]) => id === footballerId)?.[0];
-      const targetPlayer = next[targetSlotId];
-      if (sourceSlot) {
-        if (targetPlayer && !canUseInSlot(targetPlayer, sourceSlot)) {
-          setError("The player in the target slot cannot move into the vacated position.");
-          return current;
-        }
-        next[targetSlotId] = footballerId;
-        if (targetPlayer) next[sourceSlot] = targetPlayer;
-        else delete next[sourceSlot];
-      } else {
-        next[targetSlotId] = footballerId;
-      }
-      return next;
-    });
-    navigator.vibrate?.(25);
-  };
+    const current = picksRef.current;
+    const sourceSlot = findPlayerSlot(footballerId, current);
+    if (sourceSlot === targetSlotId) return true;
+    const targetPlayer = current[targetSlotId];
+    if (sourceSlot && targetPlayer && !canUseInSlot(targetPlayer, sourceSlot)) {
+      setError("The player in the target slot cannot move into the vacated position.");
+      return false;
+    }
 
-  const movePlayerToBench = (footballerId: string) => {
-    setPicks(current => {
-      const sourceSlot = Object.entries(current).find(([, id]) => id === footballerId)?.[0];
-      if (!sourceSlot) return current;
-      const next = { ...current };
-      delete next[sourceSlot];
-      return next;
-    });
-    navigator.vibrate?.(20);
-  };
+    const next = { ...current };
+    if (sourceSlot) delete next[sourceSlot];
+    // Defensive duplicate cleanup: a player can only exist in one logical slot.
+    for (const [slotId, id] of Object.entries(next)) if (id === footballerId) delete next[slotId];
+    next[targetSlotId] = footballerId;
+    if (sourceSlot && targetPlayer) next[sourceSlot] = targetPlayer;
+    commitPicks(next);
+    navigator.vibrate?.(18);
+    return true;
+  }, [canUseInSlot, commitPicks, findPlayerSlot, roleForSlot, setError]);
 
-  const finishPointerDrag = (clientX: number, clientY: number) => {
+  /** Atomic starter↔substitute swap. The starter never disappears for an intermediate render. */
+  const swapStarterWithBenchPlayer = React.useCallback((starterId: string, benchPlayerId: string): boolean => {
+    const current = picksRef.current;
+    const sourceSlot = findPlayerSlot(starterId, current);
+    if (!sourceSlot || findPlayerSlot(benchPlayerId, current)) return false;
+    if (!canUseInSlot(benchPlayerId, sourceSlot)) {
+      setError(roleForSlot(sourceSlot) === "GK" ? "Only a goalkeeper can replace the goalkeeper." : "A goalkeeper cannot replace an outfield starter.");
+      return false;
+    }
+    const next = { ...current, [sourceSlot]: benchPlayerId };
+    commitPicks(next);
+    navigator.vibrate?.(18);
+    return true;
+  }, [canUseInSlot, commitPicks, findPlayerSlot, roleForSlot, setError]);
+
+  const handlePlayerTap = React.useCallback((footballerId: string) => {
+    if (performance.now() < suppressTapUntil.current || me.lineupSubmitted) return;
+    const selected = selectedPlayerId;
+    if (!selected) { setSelectedPlayerId(footballerId); return; }
+    if (selected === footballerId) { setSelectedPlayerId(null); return; }
+
+    const selectedSlot = findPlayerSlot(selected);
+    const clickedSlot = findPlayerSlot(footballerId);
+    let moved = false;
+    if (clickedSlot) moved = movePlayerToSlot(selected, clickedSlot);
+    else if (selectedSlot) moved = movePlayerToSlot(footballerId, selectedSlot);
+    if (moved) setSelectedPlayerId(null);
+    else if (!selectedSlot && !clickedSlot) setSelectedPlayerId(footballerId);
+  }, [findPlayerSlot, me.lineupSubmitted, movePlayerToSlot, selectedPlayerId]);
+
+  const clearHoverTarget = React.useCallback(() => {
+    if (!hoverTarget.current) return;
+    hoverTarget.current.classList.remove("drag-hover-valid", "drag-hover-invalid", "drag-hover-secondary");
+    hoverTarget.current = null;
+  }, []);
+
+  const dropTargetAt = React.useCallback((x: number, y: number) => document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-slot-id], [data-bench-player-id], [data-bench-drop]") ?? null, []);
+
+  const dropTargetValidity = React.useCallback((footballerId: string, target: HTMLElement | null): "valid" | "secondary" | "invalid" => {
+    if (!target) return "invalid";
+    if (target.dataset.slotId) {
+      if (!canUseInSlot(footballerId, target.dataset.slotId)) return "invalid";
+      const player = playerMap.get(footballerId);
+      const role = roleForSlot(target.dataset.slotId);
+      if (!player || !role) return "invalid";
+      return player.primaryRole === role ? "valid" : getFootballerRoles(player).includes(role) ? "secondary" : "valid";
+    }
+    if (target.dataset.benchPlayerId) {
+      const sourceSlot = findPlayerSlot(footballerId);
+      return sourceSlot && canUseInSlot(target.dataset.benchPlayerId, sourceSlot) ? "valid" : "invalid";
+    }
+    if (target.hasAttribute("data-bench-drop")) {
+      const sourceSlot = findPlayerSlot(footballerId);
+      return sourceSlot && substitutes.length === 1 && canUseInSlot(substitutes[0]!.footballer.id, sourceSlot) ? "valid" : "invalid";
+    }
+    return "invalid";
+  }, [canUseInSlot, findPlayerSlot, playerMap, roleForSlot, substitutes]);
+
+  const paintHoverTarget = React.useCallback((footballerId: string, target: HTMLElement | null) => {
+    if (hoverTarget.current === target) return;
+    clearHoverTarget();
+    if (!target) return;
+    const validity = dropTargetValidity(footballerId, target);
+    target.classList.add(validity === "valid" ? "drag-hover-valid" : validity === "secondary" ? "drag-hover-secondary" : "drag-hover-invalid");
+    hoverTarget.current = target;
+  }, [clearHoverTarget, dropTargetValidity]);
+
+  const updateDragVisual = React.useCallback(() => {
+    animationFrame.current = null;
     const drag = pointerDrag.current;
     if (!drag?.active) return;
-    const target = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>("[data-slot-id], [data-bench-drop]");
-    if (target?.dataset.slotId) movePlayerToSlot(drag.id, target.dataset.slotId);
-    else if (target?.hasAttribute("data-bench-drop")) movePlayerToBench(drag.id);
-  };
+    const { x, y, pointerType } = latestPointer.current;
+    const yOffset = pointerType === "touch" ? 68 : pointerType === "pen" ? 44 : 22;
+    if (overlayRef.current) overlayRef.current.style.transform = `translate3d(${x}px, ${y - yOffset}px, 0) translate(-50%, -50%)`;
+    paintHoverTarget(drag.id, dropTargetAt(x, y));
+  }, [dropTargetAt, paintHoverTarget]);
 
-  useEffect(() => {
-    const onMove = (event: PointerEvent) => {
-      const drag = pointerDrag.current;
-      if (!drag || event.pointerId !== drag.pointerId) return;
-      const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
-      if (!drag.active && distance > 10) {
+  const scheduleDragVisual = React.useCallback((x: number, y: number, pointerType: string) => {
+    latestPointer.current = { x, y, pointerType };
+    if (animationFrame.current === null) animationFrame.current = window.requestAnimationFrame(updateDragVisual);
+  }, [updateDragVisual]);
+
+  const cleanupPointerDrag = React.useCallback(() => {
+    const drag = pointerDrag.current;
+    if (drag?.timer !== null && drag?.timer !== undefined) window.clearTimeout(drag.timer);
+    pointerDrag.current = null;
+    if (animationFrame.current !== null) window.cancelAnimationFrame(animationFrame.current);
+    animationFrame.current = null;
+    clearHoverTarget();
+    document.body.classList.remove("formation-dragging");
+    setDraggingPlayer(null);
+    if (drag?.element) {
+      try { if (drag.element.hasPointerCapture(drag.pointerId)) drag.element.releasePointerCapture(drag.pointerId); } catch { /* pointer already released */ }
+    }
+  }, [clearHoverTarget]);
+
+  const activatePointerDrag = React.useCallback((drag: NonNullable<typeof pointerDrag.current>, x: number, y: number) => {
+    if (drag.active || pointerDrag.current !== drag) return;
+    drag.active = true;
+    if (drag.timer !== null) window.clearTimeout(drag.timer);
+    drag.timer = null;
+    try { drag.element.setPointerCapture(drag.pointerId); } catch { /* implicit capture is sufficient on some browsers */ }
+    setSelectedPlayerId(null);
+    setDraggingPlayer(drag.id);
+    document.body.classList.add("formation-dragging");
+    scheduleDragVisual(x, y, drag.pointerType);
+    navigator.vibrate?.(12);
+  }, [scheduleDragVisual]);
+
+  const performDrop = React.useCallback((footballerId: string, x: number, y: number) => {
+    const target = dropTargetAt(x, y);
+    if (!target) return false;
+    if (target.dataset.slotId) return movePlayerToSlot(footballerId, target.dataset.slotId);
+    if (target.dataset.benchPlayerId) return swapStarterWithBenchPlayer(footballerId, target.dataset.benchPlayerId);
+    if (target.hasAttribute("data-bench-drop")) {
+      const sourceSlot = findPlayerSlot(footballerId);
+      if (!sourceSlot) return false;
+      if (substitutes.length === 1) return swapStarterWithBenchPlayer(footballerId, substitutes[0]!.footballer.id);
+      if (substitutes.length > 1) setError("Drop onto the substitute you want to swap with.");
+    }
+    return false;
+  }, [dropTargetAt, findPlayerSlot, movePlayerToSlot, setError, substitutes, swapStarterWithBenchPlayer]);
+
+  const beginPointerDrag = React.useCallback((event: React.PointerEvent<HTMLElement>, footballerId: string) => {
+    if (me.lineupSubmitted || (event.pointerType === "mouse" && event.button !== 0)) return;
+    cleanupPointerDrag();
+    const element = event.currentTarget;
+    const drag = {
+      id: footballerId,
+      pointerId: event.pointerId,
+      pointerType: event.pointerType,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+      timer: null as number | null,
+      element
+    };
+    pointerDrag.current = drag;
+    if (event.pointerType === "mouse") {
+      try { element.setPointerCapture(event.pointerId); } catch { /* optional */ }
+    } else {
+      const holdDelay = event.pointerType === "pen" ? 80 : 120;
+      drag.timer = window.setTimeout(() => activatePointerDrag(drag, drag.startX, drag.startY), holdDelay);
+    }
+  }, [activatePointerDrag, cleanupPointerDrag, me.lineupSubmitted]);
+
+  const onPointerMove = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
+    const drag = pointerDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+    if (!drag.active) {
+      if (drag.pointerType === "mouse" && distance >= 3) activatePointerDrag(drag, event.clientX, event.clientY);
+      else if (drag.pointerType !== "mouse" && distance > 11) {
         if (drag.timer !== null) window.clearTimeout(drag.timer);
         pointerDrag.current = null;
         return;
       }
-      if (drag.active) {
-        event.preventDefault();
-        setDragPoint({ x: event.clientX, y: event.clientY });
-      }
-    };
-    const onUp = (event: PointerEvent) => {
-      const drag = pointerDrag.current;
-      if (!drag || event.pointerId !== drag.pointerId) return;
-      if (drag.timer !== null) window.clearTimeout(drag.timer);
-      finishPointerDrag(event.clientX, event.clientY);
-      pointerDrag.current = null;
-      setDraggingPlayer(null);
-      setDragPoint(null);
-      document.body.classList.remove("formation-dragging");
-    };
-    const onCancel = (event: PointerEvent) => {
-      if (pointerDrag.current?.pointerId !== event.pointerId) return;
-      if (pointerDrag.current.timer !== null) window.clearTimeout(pointerDrag.current.timer);
-      pointerDrag.current = null;
-      setDraggingPlayer(null);
-      setDragPoint(null);
-      document.body.classList.remove("formation-dragging");
-    };
-    const cancelActiveDrag = () => {
-      const drag = pointerDrag.current;
-      if (drag?.timer !== null && drag?.timer !== undefined) window.clearTimeout(drag.timer);
-      pointerDrag.current = null;
-      setDraggingPlayer(null);
-      setDragPoint(null);
-      releaseDocumentScrollLock();
-    };
-    const onVisibilityChange = () => {
-      if (document.visibilityState !== "visible") cancelActiveDrag();
-    };
+    }
+    if (drag.active) {
+      event.preventDefault();
+      scheduleDragVisual(event.clientX, event.clientY, drag.pointerType);
+    }
+  }, [activatePointerDrag, scheduleDragVisual]);
 
-    window.addEventListener("pointermove", onMove, { passive: false });
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onCancel);
-    window.addEventListener("blur", cancelActiveDrag);
+  const onPointerUp = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
+    const drag = pointerDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (drag.timer !== null) window.clearTimeout(drag.timer);
+    if (drag.active) {
+      event.preventDefault();
+      performDrop(drag.id, event.clientX, event.clientY);
+      suppressTapUntil.current = performance.now() + 320;
+    }
+    cleanupPointerDrag();
+  }, [cleanupPointerDrag, performDrop]);
+
+  const onPointerCancel = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
+    if (pointerDrag.current?.pointerId === event.pointerId) cleanupPointerDrag();
+  }, [cleanupPointerDrag]);
+
+  useEffect(() => {
+    const cancel = () => cleanupPointerDrag();
+    const onVisibilityChange = () => { if (document.visibilityState !== "visible") cancel(); };
+    window.addEventListener("blur", cancel);
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onCancel);
-      window.removeEventListener("blur", cancelActiveDrag);
+      window.removeEventListener("blur", cancel);
       document.removeEventListener("visibilitychange", onVisibilityChange);
-      cancelActiveDrag();
+      cancel();
     };
-  }, [formationId, picks]);
-
-  const beginPointerDrag = (event: React.PointerEvent<HTMLElement>, footballerId: string) => {
-    if (me.lineupSubmitted || event.pointerType === "mouse") return;
-    const drag = { id: footballerId, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, active: false, timer: null as number | null };
-    drag.timer = window.setTimeout(() => {
-      if (pointerDrag.current !== drag) return;
-      drag.active = true;
-      setDraggingPlayer(footballerId);
-      setDragPoint({ x: drag.startX, y: drag.startY });
-      document.body.classList.add("formation-dragging");
-      navigator.vibrate?.(30);
-    }, 180);
-    pointerDrag.current = drag;
-  };
+  }, [cleanupPointerDrag]);
 
   const dragProps = (footballerId: string) => ({
-    draggable: true,
-    onDragStartCapture: (event: React.DragEvent<HTMLElement>) => {
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", footballerId);
-      setDraggingPlayer(footballerId);
-    },
-    onDragEnd: () => setDraggingPlayer(null),
-    onPointerDown: (event: React.PointerEvent<HTMLElement>) => beginPointerDrag(event, footballerId)
+    draggable: false,
+    onPointerDown: (event: React.PointerEvent<HTMLElement>) => beginPointerDrag(event, footballerId),
+    onPointerMove,
+    onPointerUp,
+    onPointerCancel,
+    onContextMenu: (event: React.MouseEvent<HTMLElement>) => event.preventDefault(),
+    onClick: (event: React.MouseEvent<HTMLElement>) => { event.stopPropagation(); handlePlayerTap(footballerId); }
   });
 
   const submit = () => {
@@ -1362,18 +1488,18 @@ function FormationRoom({ socket, state, managerId, setError, leave }: { socket: 
   if (me.lineupSubmitted) return <main className="formation-wait page"><div className="formation-wait-card"><div className="formation-check">✓</div><div className="eyebrow">LINEUP LOCKED</div><h1>{FORMATION_BY_ID.get(me.formationId ?? "")?.name}</h1><p>Your {starterTarget}-player formation{substituteTarget ? ` and ${substituteTarget} substitute${substituteTarget === 1 ? "" : "s"}` : ""} are ready. Waiting for the remaining managers.</p><div className="submission-progress"><span>{selectedManagerCount}/{state.managers.length} submitted</span><i><b style={{ width: `${selectedManagerCount / state.managers.length * 100}%` }} /></i></div><div className="formation-manager-status">{state.managers.map(manager => <span className={manager.lineupSubmitted ? "done" : ""} key={manager.id}>{manager.avatar} {manager.name} <b>{manager.lineupSubmitted ? "READY" : "CHOOSING"}</b></span>)}</div>{state.isSolo && <button className="danger-outline" onClick={quitSolo}>Quit Solo Match</button>}</div></main>;
 
   const dragged = draggingPlayer ? playerMap.get(draggingPlayer) : null;
-  return <main className="formation-page page"><header className="formation-header"><div><div className="eyebrow">POST-AUCTION TEAM SETUP</div><h1>Choose formation & assemble your team</h1><p>Drag every player into position. Primary and secondary roles receive the best rating.</p></div><FormationClock endsAt={state.formationEndsAt} /></header>
+  return <main className="formation-page page"><header className="formation-header"><div><div className="eyebrow">POST-AUCTION TEAM SETUP</div><h1>Choose formation & assemble your team</h1><p>Tap two players to swap, or drag with mouse, touch, or stylus. Primary and supported roles receive the best rating.</p></div><FormationClock endsAt={state.formationEndsAt} /></header>
     <div className="formation-layout"><aside className="panel formation-list"><div className="panel-title"><h2>Formations</h2><span>{validFormations.length} OPTIONS</span></div><div className="formation-options">{validFormations.map(item => <button className={formationId === item.id ? "active" : ""} onClick={() => chooseFormation(item.id)} key={item.id}><b>{item.name}</b><span>{item.style}</span></button>)}</div></aside>
-      <section className="lineup-center"><div className="lineup-toolbar"><div><span>SELECTED SYSTEM</span><strong>{formation.name}</strong><em>{formation.style}</em></div><button onClick={() => setPicks(autoArrange(me.squad, formation))}>AUTO ARRANGE</button></div><div className="tactical-pitch">{formation.slots.map(formationSlot => {
+      <section className="lineup-center"><div className="lineup-toolbar"><div><span>SELECTED SYSTEM</span><strong>{formation.name}</strong><em>{formation.style}</em></div><button onClick={() => { const arranged = autoArrange(me.squad, formation); picksRef.current = arranged; setSelectedPlayerId(null); setPicks(arranged); }}>AUTO ARRANGE</button></div><div className="tactical-pitch">{formation.slots.map(formationSlot => {
         const player = playerMap.get(picks[formationSlot.id] ?? "");
         const fit = player ? getRoleFitLabel(player, formationSlot.role) : null;
-        return <button type="button" data-slot-id={formationSlot.id} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={event => { event.preventDefault(); const id = event.dataTransfer.getData("text/plain"); if (id) movePlayerToSlot(id, formationSlot.id); }} className={`pitch-player ${draggingPlayer ? (canUseInSlot(draggingPlayer, formationSlot.id) ? "drag-target drag-valid" : "drag-target drag-invalid") : ""}`} style={{ left: `${formationSlot.x}%`, top: `${formationSlot.y}%` }} key={formationSlot.id}><span className="role-badge">{formationSlot.role}</span>{draggingPlayer && <span className="drag-preview">{Math.round(clientRoleScore(playerMap.get(draggingPlayer)!, formationSlot.role))}</span>}{player ? <motion.div {...dragProps(player.id)} className="pitch-player-content" key={player.id} initial={{ opacity: 0, scale: .82, y: 8 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: .22, ease: [0.22, 1, 0.36, 1] }}><FootballerPhoto key={player.id} player={player} compact /><strong>{player.name.split(" ").at(-1)}</strong><small><b>{player.primaryRole}</b>{player.secondaryRoles.length ? ` · ${player.secondaryRoles.join("/")}` : ""} · {player.overall} OVR</small><em className={`fit-${fit?.toLowerCase().replaceAll(" ", "-")}`}>{fit}</em><i className="drag-grip" aria-hidden="true">⋮⋮</i></motion.div> : <b>+</b>}</button>;
-      })}</div><div className="assembly-note">Desktop: drag with the mouse. Mobile/tablet: press briefly, then drag. Drop a starter into the substitutes panel to bench them.</div></section>
-      <aside className={`panel bench-panel ${draggingPlayer ? "is-dragging" : ""}`} data-bench-drop onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={event => { event.preventDefault(); const id = event.dataTransfer.getData("text/plain"); if (id) movePlayerToBench(id); }}><div className="panel-title"><h2>{substituteTarget ? "Substitutes" : "Squad"}</h2><span>{substitutes.length}/{substituteTarget}</span></div><div className="bench-list">{substitutes.length ? substitutes.map(entry => <button {...dragProps(entry.footballer.id)} key={entry.footballer.id}><FootballerPhoto key={entry.footballer.id} player={entry.footballer} compact /><div><strong>{entry.footballer.name}</strong><span><b>{entry.footballer.primaryRole}</b>{entry.footballer.secondaryRoles.length ? ` · ${entry.footballer.secondaryRoles.join("/")}` : ""} · {entry.footballer.overall} OVR</span></div><i className="drag-grip" aria-hidden="true">⋮⋮</i></button>) : <div className="no-subs">Drag a starter here to move them to the bench.</div>}</div><div className="lineup-summary"><span>Starters</span><b>{Object.values(picks).length}/{starterTarget}</b><span>Substitutes</span><b>{substitutes.length}/{substituteTarget}</b></div><button className="primary submit-lineup" disabled={submitting || Object.values(picks).length !== starterTarget || substitutes.length !== substituteTarget} onClick={submit}>{submitting ? "LOCKING…" : "READY · LOCK LINEUP"}</button>{state.isSolo && <button className="danger-outline" onClick={quitSolo}>Quit Solo Match</button>}</aside></div>
-    {dragged && dragPoint && <div className="touch-drag-ghost" style={{ transform: `translate3d(${dragPoint.x}px, ${dragPoint.y}px, 0)` }}><b>{dragged.primaryRole}</b><span>{dragged.name}</span><em>{dragged.overall}</em></div>}
+        const selected = player ? selectedPlayerId === player.id : false;
+        return <button type="button" data-slot-id={formationSlot.id} onClick={() => { if (selectedPlayerId && !player) { if (movePlayerToSlot(selectedPlayerId, formationSlot.id)) setSelectedPlayerId(null); } }} className={`pitch-player ${draggingPlayer ? (canUseInSlot(draggingPlayer, formationSlot.id) ? "drag-target drag-valid" : "drag-target drag-invalid") : ""}`} style={{ left: `${formationSlot.x}%`, top: `${formationSlot.y}%` }} key={formationSlot.id}><span className="role-badge">{formationSlot.role}</span>{draggingPlayer && <span className="drag-preview">{Math.round(clientRoleScore(playerMap.get(draggingPlayer)!, formationSlot.role))}</span>}{player ? <div {...dragProps(player.id)} className={`pitch-player-content formation-drag-card ${selected ? "selected" : ""}`} key={player.id}><FootballerPhoto key={player.id} player={player} compact /><strong>{player.name.split(" ").at(-1)}</strong><small><b>{player.primaryRole}</b>{player.secondaryRoles.length ? ` · ${player.secondaryRoles.join("/")}` : ""} · {player.overall} OVR</small><em className={`fit-${fit?.toLowerCase().replaceAll(" ", "-")}`}>{fit}</em><i className="drag-grip" aria-hidden="true">⋮⋮</i></div> : <b>+</b>}</button>;
+      })}</div><div className="assembly-note">Tap a player then tap another to swap. Dragging uses a lightweight overlay, so the full lineup is updated only once when you drop.</div></section>
+      <aside className={`panel bench-panel ${draggingPlayer ? "is-dragging" : ""}`} data-bench-drop><div className="panel-title"><h2>{substituteTarget ? "Substitutes" : "Squad"}</h2><span>{substitutes.length}/{substituteTarget}</span></div><div className="bench-list">{substitutes.length ? substitutes.map(entry => <button {...dragProps(entry.footballer.id)} type="button" data-bench-player-id={entry.footballer.id} className={`formation-drag-card ${selectedPlayerId === entry.footballer.id ? "selected" : ""}`} key={entry.footballer.id}><FootballerPhoto key={entry.footballer.id} player={entry.footballer} compact /><div><strong>{entry.footballer.name}</strong><span><b>{entry.footballer.primaryRole}</b>{entry.footballer.secondaryRoles.length ? ` · ${entry.footballer.secondaryRoles.join("/")}` : ""} · {entry.footballer.overall} OVR</span></div><i className="drag-grip" aria-hidden="true">⋮⋮</i></button>) : <div className="no-subs">No substitutes are currently available.</div>}</div><div className="lineup-summary"><span>Starters</span><b>{Object.values(picks).length}/{starterTarget}</b><span>Substitutes</span><b>{substitutes.length}/{substituteTarget}</b></div><button className="primary submit-lineup" disabled={submitting || Object.values(picks).length !== starterTarget || substitutes.length !== substituteTarget} onClick={submit}>{submitting ? "LOCKING…" : "READY · LOCK LINEUP"}</button>{state.isSolo && <button className="danger-outline" onClick={quitSolo}>Quit Solo Match</button>}</aside></div>
+    {dragged && <div ref={overlayRef} className="touch-drag-ghost formation-drag-overlay"><FootballerPhoto player={dragged} compact /><div><b>{dragged.primaryRole}</b><span>{dragged.name}</span></div><em>{dragged.overall}</em></div>}
   </main>;
 }
-
 function RoomChat({ socket, state, managerId, setError }: { socket: GameSocket; state: RoomState; managerId: string; setError: (value: string) => void }) {
   const [open, setOpen] = useState(false);
   const closeChat = useBackClosable(open, () => setOpen(false), "room-chat");

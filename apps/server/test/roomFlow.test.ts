@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RoomState } from "@auction-eleven/shared";
+import { getOpeningBid, type RoomState } from "@auction-eleven/shared";
 import { FOOTBALLERS } from "../src/footballers.js";
 import { RoomManager } from "../src/roomManager.js";
 
@@ -147,8 +147,8 @@ describe("full squad room flow", () => {
         expect(id).toBeTruthy();
         expect(seen.has(id!)).toBe(false);
         seen.add(id!);
-        manager.pass(host.code, host.managerId, current.roundId);
-        manager.pass(host.code, guest.managerId, current.roundId);
+        manager.pass(host.code, host.managerId, `pass-host-${round}`, current.roundId);
+        manager.pass(host.code, guest.managerId, `pass-guest-${round}`, current.roundId);
         vi.advanceTimersByTime(2100);
       }
       expect(seen.size).toBe(10);
@@ -172,15 +172,136 @@ describe("full squad room flow", () => {
       const first = manager.getState(host.code);
       const soldId = first.currentFootballer!.id;
       manager.bid(host.code, host.managerId, 1, "request-sold-1", first.roundId);
-      manager.pass(host.code, guest.managerId, first.roundId);
+      manager.pass(host.code, guest.managerId, "pass-sold-guest", first.roundId);
       // A late duplicate pass/callback cannot finalize the same round twice.
-      manager.pass(host.code, host.managerId, first.roundId);
+      manager.pass(host.code, host.managerId, "pass-sold-host-late", first.roundId);
       expect(manager.getState(host.code).phase).toBe("round_result");
       vi.advanceTimersByTime(2100);
       const next = manager.getState(host.code);
       expect(next.phase).toBe("auction");
       expect(next.currentFootballer?.id).not.toBe(soldId);
       expect(next.managers.find(item => item.id === host.managerId)?.squad.filter(entry => entry.footballer.id === soldId)).toHaveLength(1);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("immediately sells to the last remaining bidder after everyone else passes", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const host = manager.create("EarlyHost", "session-early-host", "socket-early-host", false);
+      manager.updateSettings(host.code, host.managerId, { managerLimit: 2, squadSize: 6, substituteCount: 0 });
+      const guest = manager.join(host.code, "EarlyGuest", "session-early-guest", "socket-early-guest");
+      manager.setReady(host.code, host.managerId, true);
+      manager.setReady(host.code, guest.managerId, true);
+      manager.start(host.code, host.managerId);
+      const round = manager.getState(host.code, guest.managerId);
+      manager.pass(host.code, host.managerId, "pass-early-host", round.roundId);
+      expect(manager.getState(host.code, guest.managerId).phase).toBe("auction");
+      const opening = getOpeningBid(round.settings, round.currentFootballer);
+      manager.bid(host.code, guest.managerId, opening, "bid-early-guest", round.roundId);
+      const result = manager.getState(host.code, guest.managerId);
+      expect(result.phase).toBe("round_result");
+      expect(result.lastWinner?.managerName).toBe("EarlyGuest");
+      expect(result.lastWinner?.amount).toBe(opening);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("immediately sells the existing highest bid when the last challenger passes", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const host = manager.create("LeaderHost", "session-leader-host", "socket-leader-host", false);
+      manager.updateSettings(host.code, host.managerId, { managerLimit: 2, squadSize: 6, substituteCount: 0 });
+      const guest = manager.join(host.code, "LeaderGuest", "session-leader-guest", "socket-leader-guest");
+      manager.setReady(host.code, host.managerId, true);
+      manager.setReady(host.code, guest.managerId, true);
+      manager.start(host.code, host.managerId);
+      const round = manager.getState(host.code, host.managerId);
+      const opening = getOpeningBid(round.settings, round.currentFootballer);
+      manager.bid(host.code, host.managerId, opening, "bid-existing-leader", round.roundId);
+      expect(manager.getState(host.code, host.managerId).phase).toBe("auction");
+      manager.pass(host.code, guest.managerId, "pass-existing-challenger", round.roundId);
+      const result = manager.getState(host.code, host.managerId);
+      expect(result.phase).toBe("round_result");
+      expect(result.lastWinner?.managerName).toBe("LeaderHost");
+      expect(result.lastWinner?.amount).toBe(opening);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for an opening bid when exactly one of three managers remains, then sells immediately", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const host = manager.create("ThreeHost", "session-three-host", "socket-three-host", false);
+      manager.updateSettings(host.code, host.managerId, { managerLimit: 3, squadSize: 6, substituteCount: 0 });
+      const second = manager.join(host.code, "ThreeSecond", "session-three-second", "socket-three-second");
+      const third = manager.join(host.code, "ThreeThird", "session-three-third", "socket-three-third");
+      for (const id of [host.managerId, second.managerId, third.managerId]) manager.setReady(host.code, id, true);
+      manager.start(host.code, host.managerId);
+      const round = manager.getState(host.code, third.managerId);
+      manager.pass(host.code, host.managerId, "pass-three-host", round.roundId);
+      manager.pass(host.code, second.managerId, "pass-three-second", round.roundId);
+      expect(manager.getState(host.code, third.managerId).phase).toBe("auction");
+      expect(manager.getState(host.code, third.managerId).highestBidderId).toBeNull();
+      const opening = getOpeningBid(round.settings, round.currentFootballer);
+      manager.bid(host.code, third.managerId, opening, "bid-three-third", round.roundId);
+      expect(manager.getState(host.code, third.managerId).phase).toBe("round_result");
+      expect(manager.getState(host.code, third.managerId).lastWinner?.managerName).toBe("ThreeThird");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps bidding open while another eligible challenger remains", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const host = manager.create("OpenHost", "session-open-host", "socket-open-host", false);
+      manager.updateSettings(host.code, host.managerId, { managerLimit: 3, squadSize: 6, substituteCount: 0 });
+      const second = manager.join(host.code, "OpenSecond", "session-open-second", "socket-open-second");
+      const third = manager.join(host.code, "OpenThird", "session-open-third", "socket-open-third");
+      for (const id of [host.managerId, second.managerId, third.managerId]) manager.setReady(host.code, id, true);
+      manager.start(host.code, host.managerId);
+      const round = manager.getState(host.code, second.managerId);
+      manager.pass(host.code, host.managerId, "pass-open-host", round.roundId);
+      const opening = getOpeningBid(round.settings, round.currentFootballer);
+      manager.bid(host.code, second.managerId, opening, "bid-open-second", round.roundId);
+      const current = manager.getState(host.code, second.managerId);
+      expect(current.phase).toBe("auction");
+      expect(current.highestBidderId).toBe(second.managerId);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks the round skipped immediately when everyone passes without a bid", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const host = manager.create("AllPassHost", "session-allpass-host", "socket-allpass-host", false);
+      manager.updateSettings(host.code, host.managerId, { managerLimit: 2, squadSize: 6, substituteCount: 0, reauctionUnsold: false });
+      const guest = manager.join(host.code, "AllPassGuest", "session-allpass-guest", "socket-allpass-guest");
+      manager.setReady(host.code, host.managerId, true);
+      manager.setReady(host.code, guest.managerId, true);
+      manager.start(host.code, host.managerId);
+      const round = manager.getState(host.code, host.managerId);
+      manager.pass(host.code, host.managerId, "pass-all-host", round.roundId);
+      manager.pass(host.code, guest.managerId, "pass-all-guest", round.roundId);
+      const result = manager.getState(host.code, host.managerId);
+      expect(result.phase).toBe("round_result");
+      expect(result.lastWinner).toBeNull();
+      expect(result.endsAt).toBeNull();
     } finally {
       vi.clearAllTimers();
       vi.useRealTimers();

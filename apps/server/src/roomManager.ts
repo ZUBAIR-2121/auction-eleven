@@ -322,6 +322,63 @@ export class RoomManager {
     return getConfiguredSquadSize(room.settings.squadSize, room.settings.substituteCount);
   }
 
+  /**
+   * Managers who can still submit the next legal bid for the active footballer.
+   * This is deliberately server-authoritative and excludes passed/disconnected
+   * managers before deciding whether a round can end early.
+   */
+  private managersAbleToChallenge(room: InternalRoom): InternalManager[] {
+    const footballer = room.currentFootballer;
+    if (!footballer || room.phase !== "auction") return [];
+    const maximumSquadSize = this.configuredSquadSize(room);
+    const requiredBid = room.currentBid === 0
+      ? getOpeningBid(room.settings, footballer)
+      : room.currentBid + room.settings.bidIncrement;
+    return room.managers.filter(manager =>
+      (manager.isBot || manager.connected) &&
+      !manager.auctionComplete &&
+      manager.squad.length < maximumSquadSize &&
+      manager.budget >= requiredBid &&
+      !this.managerOwns(manager, footballer) &&
+      !room.passedManagerIds.includes(manager.id)
+    );
+  }
+
+  /**
+   * The single authoritative early-completion gate for the current auction.
+   * It is called after every event that changes bidder eligibility. endRound()
+   * remains idempotent via transitionRoundId, so timer/pass/bid races cannot
+   * sell or advance the same round more than once.
+   */
+  private evaluateAuctionCompletion(room: InternalRoom): boolean {
+    if (room.phase !== "auction" || room.transitionRoundId || !room.currentFootballer) return false;
+    const active = this.managersAbleToChallenge(room);
+
+    if (room.highestBidderId) {
+      // The current leader does not need to bid again. If nobody else can place
+      // a legal next bid, finalize immediately at the existing winning price.
+      const challengers = active.filter(manager => manager.id !== room.highestBidderId);
+      if (challengers.length === 0) {
+        this.endRound(room.code, room.roundId);
+        return true;
+      }
+      return false;
+    }
+
+    // With no bid yet, one remaining manager must still submit the opening bid.
+    // Only an empty active set means everybody passed/became ineligible.
+    if (active.length === 0) {
+      this.endRound(room.code, room.roundId);
+      return true;
+    }
+    return false;
+  }
+
+  private markManagerPassedForCurrentRound(room: InternalRoom, managerId: string): void {
+    if (room.phase !== "auction" || room.transitionRoundId || !room.currentFootballer) return;
+    if (!room.passedManagerIds.includes(managerId)) room.passedManagerIds = [...room.passedManagerIds, managerId];
+  }
+
   private safeTimer(room: InternalRoom, label: string, callback: () => void, delay: number): NodeJS.Timeout {
     return setTimeout(() => {
       try { callback(); }
@@ -672,7 +729,8 @@ export class RoomManager {
     manager.connected = false;
     manager.socketId = null;
     this.migrateHostIfNeeded(room);
-    this.broadcast(room);
+    this.markManagerPassedForCurrentRound(room, manager.id);
+    if (!this.evaluateAuctionCompletion(room)) this.broadcast(room);
     this.emitDirectoryChanged();
   }
 
@@ -684,7 +742,8 @@ export class RoomManager {
       manager.socketId = null;
       this.migrateHostIfNeeded(room);
       if (room.phase === "lobby" && !room.isSolo) this.scheduleLobbyDisconnectCleanup(room, manager.id);
-      this.broadcast(room);
+      this.markManagerPassedForCurrentRound(room, manager.id);
+      if (!this.evaluateAuctionCompletion(room)) this.broadcast(room);
       this.emitDirectoryChanged();
     }
   }
@@ -948,6 +1007,12 @@ export class RoomManager {
     room.highestBidderId = manager.id;
     const entry: BidEntry = { id: this.id("bid"), managerId: manager.id, managerName: manager.name, amount, receivedAt: Date.now() };
     room.bidHistory = [entry, ...room.bidHistory].slice(0, 12);
+
+    // A valid bid can make the bidder the only remaining competitor. Resolve
+    // that state before extending/restarting the timer so a sole bidder wins
+    // immediately instead of waiting for the countdown.
+    if (this.evaluateAuctionCompletion(room)) return;
+
     if (room.endsAt && room.endsAt - Date.now() <= room.settings.antiSnipeSeconds * 1000) {
       room.endsAt = Date.now() + room.settings.antiSnipeSeconds * 1000;
       this.scheduleEnd(room);
@@ -955,32 +1020,19 @@ export class RoomManager {
     this.broadcastAuctionPatch(room);
   }
 
-  pass(code: string, managerId: string, roundId: string): void {
+  pass(code: string, managerId: string, requestId: string, roundId: string): void {
     const room = this.get(code);
     const manager = this.managerIn(room, managerId);
     if (room.transitionRoundId) return;
     if (room.phase !== "auction" || !room.endsAt || Date.now() >= room.endsAt) throw new Error("This auction round is closed.");
     if (roundId !== room.roundId) throw new Error("That pass belongs to an older auction round.");
+    if (!requestId || requestId.length > 100) throw new Error("Invalid pass request.");
+    if (room.seenRequestIds.has(requestId)) return;
+    room.seenRequestIds.add(requestId);
     if (room.passedManagerIds.includes(manager.id)) return;
 
-    room.passedManagerIds = [...room.passedManagerIds, manager.id];
-
-    const maximumSquadSize = this.configuredSquadSize(room);
-    const openingBid = getOpeningBid(room.settings, room.currentFootballer);
-    const eligible = room.managers.filter(item =>
-      !item.auctionComplete && item.squad.length < maximumSquadSize && item.budget >= openingBid &&
-      !!room.currentFootballer && !this.managerOwns(item, room.currentFootballer)
-    );
-    const challengers = eligible.filter(item => item.id !== room.highestBidderId);
-    if (room.highestBidderId) {
-      if (challengers.every(item => room.passedManagerIds.includes(item.id))) {
-        this.endRound(room.code, room.roundId);
-        return;
-      }
-    } else if (eligible.length === 0 || eligible.every(item => room.passedManagerIds.includes(item.id))) {
-      this.endRound(room.code, room.roundId);
-      return;
-    }
+    this.markManagerPassedForCurrentRound(room, manager.id);
+    if (this.evaluateAuctionCompletion(room)) return;
     this.broadcastAuctionPatch(room);
   }
 
@@ -996,17 +1048,13 @@ export class RoomManager {
     if (goalkeeperCount < 1) throw new Error("Sign at least one goalkeeper before completing your squad.");
     if (outfieldCount < starterCount - 1) throw new Error(`Sign at least ${starterCount - 1} outfield players for your ${starterCount}-player formation.`);
     manager.auctionComplete = true;
-    if (!room.passedManagerIds.includes(manager.id)) room.passedManagerIds = [...room.passedManagerIds, manager.id];
-    this.broadcast(room);
+    this.markManagerPassedForCurrentRound(room, manager.id);
     if (room.managers.every(item => item.auctionComplete || item.squad.length >= configuredSquadSize)) {
       this.beginFormation(room);
       return;
     }
-    if (room.phase === "auction") {
-      const openingBid = getOpeningBid(room.settings, room.currentFootballer);
-      const activeChallengers = room.managers.filter(item => !item.auctionComplete && item.id !== room.highestBidderId && item.squad.length < configuredSquadSize && item.budget >= openingBid);
-      if (room.highestBidderId && activeChallengers.every(item => room.passedManagerIds.includes(item.id))) this.endRound(room.code, room.roundId);
-    }
+    if (room.phase === "auction" && this.evaluateAuctionCompletion(room)) return;
+    this.broadcast(room);
   }
 
   private endRound(code: string, roundId: string): void {

@@ -379,7 +379,7 @@ export interface ClientToServerEvents {
   "game:start": (payload: { code: string }, ack: Ack<null>) => void;
   "game:quitSolo": (payload: { code: string }, ack: Ack<null>) => void;
   "auction:bid": (payload: { code: string; amount: number; requestId: string; roundId: string }, ack: Ack<null>) => void;
-  "auction:pass": (payload: { code: string; roundId: string }, ack: Ack<null>) => void;
+  "auction:pass": (payload: { code: string; roundId: string; requestId: string }, ack: Ack<null>) => void;
   "auction:complete": (payload: { code: string }, ack: Ack<null>) => void;
   "lineup:submit": (payload: { code: string; formationId: string; picks: LineupPick[] }, ack: Ack<null>) => void;
   "room:reaction": (payload: { code: string; reaction: string }) => void;

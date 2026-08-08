@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RoomState } from "@auction-eleven/shared";
 import { FOOTBALLERS } from "../src/footballers.js";
 import { RoomManager } from "../src/roomManager.js";
@@ -66,6 +66,146 @@ describe("full squad room flow", () => {
       manager.updateSettings(created.code, created.managerId, { squadSize });
       expect(manager.getState(created.code).settings.squadSize).toBe(squadSize);
     }
+  });
+
+
+  it.each([
+    { managers: 2, starters: 11, substitutes: 10 },
+    { managers: 3, starters: 11, substitutes: 10 },
+    { managers: 4, starters: 11, substitutes: 10 },
+    { managers: 5, starters: 11, substitutes: 8 },
+    { managers: 6, starters: 11, substitutes: 5 },
+    { managers: 7, starters: 11, substitutes: 2 },
+    { managers: 8, starters: 10, substitutes: 2 }
+  ] as const)("starts a synchronized $managers-manager online room with dynamic squad capacity", ({ managers: managerCount, starters, substitutes }) => {
+    vi.useFakeTimers();
+    try {
+      let latest: RoomState | null = null;
+      const manager = new RoomManager((_code, state) => { latest = state; }, () => undefined, () => undefined);
+      const created = manager.create(`Host${managerCount}`, `session-host-${managerCount}`, `socket-host-${managerCount}`, false);
+      manager.updateSettings(created.code, created.managerId, { managerLimit: managerCount, squadSize: starters, substituteCount: substitutes });
+      const ids = [created.managerId];
+      for (let index = 1; index < managerCount; index++) {
+        const joined = manager.join(created.code, `Guest${managerCount}_${index}`, `session-${managerCount}-${index}`, `socket-${managerCount}-${index}`);
+        ids.push(joined.managerId);
+      }
+      ids.forEach(id => manager.setReady(created.code, id, true));
+      expect(() => manager.start(created.code, created.managerId)).not.toThrow();
+      expect(latest?.phase).toBe("auction");
+      expect(latest?.managers).toHaveLength(managerCount);
+      expect(latest?.settings.substituteCount).toBe(substitutes);
+      expect(new Set(latest?.managers.map(item => item.id)).size).toBe(managerCount);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts a 3-manager room with 11 starters and 5 substitutes (48 minimum)", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const host = manager.create("Host48", "session-48-host", "socket-48-host", false);
+      manager.updateSettings(host.code, host.managerId, { managerLimit: 3, squadSize: 11, substituteCount: 5 });
+      const guest2 = manager.join(host.code, "Guest48A", "session-48-a", "socket-48-a");
+      const guest3 = manager.join(host.code, "Guest48B", "session-48-b", "socket-48-b");
+      [host.managerId, guest2.managerId, guest3.managerId].forEach(id => manager.setReady(host.code, id, true));
+      expect(() => manager.start(host.code, host.managerId)).not.toThrow();
+      const state = manager.getState(host.code);
+      expect(state.phase).toBe("auction");
+      expect(state.managers).toHaveLength(3);
+      expect(state.settings.substituteCount).toBe(5);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("explains impossible player-pool configurations before kickoff", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const created = manager.create("LimitHost", "session-limit-host", "socket-limit-host", true);
+    manager.updateSettings(created.code, created.managerId, { managerLimit: 8, squadSize: 11, substituteCount: 10 });
+    expect(() => manager.start(created.code, created.managerId)).toThrow(/requires 168 footballers.*only 96 eligible footballers/i);
+  });
+
+  it("never repeats skipped footballers when re-auction is disabled", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const host = manager.create("SkipHost", "session-skip-host", "socket-skip-host", false);
+      manager.updateSettings(host.code, host.managerId, { managerLimit: 2, squadSize: 6, substituteCount: 0, reauctionUnsold: false });
+      const guest = manager.join(host.code, "SkipGuest", "session-skip-guest", "socket-skip-guest");
+      manager.setReady(host.code, host.managerId, true);
+      manager.setReady(host.code, guest.managerId, true);
+      manager.start(host.code, host.managerId);
+
+      const seen = new Set<string>();
+      for (let round = 0; round < 10; round++) {
+        const current = manager.getState(host.code);
+        expect(current.phase).toBe("auction");
+        const id = current.currentFootballer?.id;
+        expect(id).toBeTruthy();
+        expect(seen.has(id!)).toBe(false);
+        seen.add(id!);
+        manager.pass(host.code, host.managerId, current.roundId);
+        manager.pass(host.code, guest.managerId, current.roundId);
+        vi.advanceTimersByTime(2100);
+      }
+      expect(seen.size).toBe(10);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("never repeats a sold footballer and finalizes a round only once", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const host = manager.create("SoldHost", "session-sold-host", "socket-sold-host", false);
+      manager.updateSettings(host.code, host.managerId, { managerLimit: 2, squadSize: 6, substituteCount: 0, reauctionUnsold: false });
+      const guest = manager.join(host.code, "SoldGuest", "session-sold-guest", "socket-sold-guest");
+      manager.setReady(host.code, host.managerId, true);
+      manager.setReady(host.code, guest.managerId, true);
+      manager.start(host.code, host.managerId);
+
+      const first = manager.getState(host.code);
+      const soldId = first.currentFootballer!.id;
+      manager.bid(host.code, host.managerId, 1, "request-sold-1", first.roundId);
+      manager.pass(host.code, guest.managerId, first.roundId);
+      // A late duplicate pass/callback cannot finalize the same round twice.
+      manager.pass(host.code, host.managerId, first.roundId);
+      expect(manager.getState(host.code).phase).toBe("round_result");
+      vi.advanceTimersByTime(2100);
+      const next = manager.getState(host.code);
+      expect(next.phase).toBe("auction");
+      expect(next.currentFootballer?.id).not.toBe(soldId);
+      expect(next.managers.find(item => item.id === host.managerId)?.squad.filter(entry => entry.footballer.id === soldId)).toHaveLength(1);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reuses the same manager seat for the same reconnect session", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const host = manager.create("ReconnectHost", "session-reconnect-host", "socket-old", false);
+    const joinedAgain = manager.join(host.code, "ReconnectHost", "session-reconnect-host", "socket-new");
+    const state = manager.getState(host.code);
+    expect(joinedAgain.managerId).toBe(host.managerId);
+    expect(state.managers).toHaveLength(1);
+    expect(() => manager.assertSocketOwner(host.code, host.managerId, "socket-old")).toThrow(/another tab or device/i);
+    expect(() => manager.assertSocketOwner(host.code, host.managerId, "socket-new")).not.toThrow();
+  });
+
+  it("migrates host control when the active host disconnects", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const host = manager.create("HostMove", "session-move-host", "socket-move-host", false);
+    const guest = manager.join(host.code, "GuestMove", "session-move-guest", "socket-move-guest");
+    manager.disconnect("socket-move-host");
+    const state = manager.getState(host.code);
+    expect(state.hostId).toBe(guest.managerId);
+    expect(state.managers.find(item => item.id === guest.managerId)?.isHost).toBe(true);
   });
 
   it("stores validated real-time room chat and exposes typing state", () => {

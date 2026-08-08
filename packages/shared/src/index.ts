@@ -4,13 +4,20 @@ export type PoolTargets = Record<Position, number>;
 export type ManagerLimit = 2 | 3 | 4 | 5 | 6 | 7 | 8;
 export type SquadSize = 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
 export type BotDifficulty = "Amateur" | "Professional" | "World Class" | "Legendary";
+export type SubstituteCount = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
 export type PricingMode = "normal" | "ovr_scaled";
 export type RoomAccess = "public" | "password";
 export const MAX_SUBSTITUTES = 10;
 /** The number of players placed on the pitch for the selected squad target. */
 export const getStartingLineupSize = (squadSize: number): number => Math.min(11, Math.max(6, Math.round(squadSize)));
-/** Maximum players a manager may sign, including up to ten substitutes. */
-export const getMaximumSquadSize = (squadSize: number): number => getStartingLineupSize(squadSize) + MAX_SUBSTITUTES;
+/** Exact configured squad size for a room: starters plus host-selected substitutes. */
+export const getConfiguredSquadSize = (squadSize: number, substituteCount: number): number =>
+  getStartingLineupSize(squadSize) + Math.min(MAX_SUBSTITUTES, Math.max(0, Math.round(substituteCount)));
+/** Backwards-compatible helper. Prefer getConfiguredSquadSize for room rules. */
+export const getMaximumSquadSize = (squadSize: number, substituteCount = MAX_SUBSTITUTES): number =>
+  getConfiguredSquadSize(squadSize, substituteCount);
+export const getMinimumFootballersRequired = (managerCount: number, squadSize: number, substituteCount: number): number =>
+  Math.max(1, Math.round(managerCount)) * getConfiguredSquadSize(squadSize, substituteCount);
 export const SQUAD_POSITION_TARGETS: PoolTargets = { GK: 2, DEF: 6, MID: 5, FWD: 4 };
 export function getSquadPositionTargets(size: number): PoolTargets {
   const targets: Record<number, PoolTargets> = {
@@ -201,6 +208,8 @@ export interface GameSettings {
   pricingMode: PricingMode;
   auctionSeconds: number;
   squadSize: SquadSize;
+  substituteCount: SubstituteCount;
+  reauctionUnsold: boolean;
   antiSnipeSeconds: number;
   formationSeconds: number;
   botDifficulty: BotDifficulty;
@@ -276,6 +285,7 @@ export interface RoomDirectoryEntry {
   openSlots: number;
   pricingMode: PricingMode;
   squadSize: SquadSize;
+  substituteCount: SubstituteCount;
   auctionSeconds: number;
   createdAt: number;
 }
@@ -316,6 +326,17 @@ export interface RoomState {
   chatMessages: ChatMessage[];
 }
 
+export interface AuctionStatePatch {
+  code: string;
+  version: number;
+  roundId: string;
+  currentBid: number;
+  highestBidderId: string | null;
+  endsAt: number | null;
+  bidHistory: BidEntry[];
+  passedManagerIds: string[];
+}
+
 export interface ClientToServerEvents {
   "room:create": (payload: { name: string; sessionId: string; solo?: boolean; access?: RoomAccess; password?: string }, ack: Ack<{ code: string; managerId: string }>) => void;
   "room:join": (payload: { code: string; name: string; sessionId: string; password?: string }, ack: Ack<{ code: string; managerId: string }>) => void;
@@ -340,6 +361,7 @@ export interface ClientToServerEvents {
 
 export interface ServerToClientEvents {
   "room:state": (state: RoomState) => void;
+  "room:auctionPatch": (patch: AuctionStatePatch) => void;
   "rooms:changed": () => void;
   "room:error": (message: string) => void;
   "room:reaction": (payload: { managerName: string; reaction: string; at: number }) => void;

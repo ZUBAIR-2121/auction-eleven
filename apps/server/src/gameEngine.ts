@@ -3,7 +3,7 @@ import {
   FORMATIONS,
   getFootballerRoles,
   getOpeningBid,
-  getMaximumSquadSize,
+  getConfiguredSquadSize,
   getStartingLineupSize,
   type Footballer,
   type FormationDefinition,
@@ -24,11 +24,13 @@ export const DEFAULT_SETTINGS: GameSettings = {
   pricingMode: "normal",
   auctionSeconds: 12,
   squadSize: 11,
+  substituteCount: 5,
+  reauctionUnsold: false,
   antiSnipeSeconds: 5,
   formationSeconds: 180,
   botDifficulty: "Professional",
   managerLimit: 6,
-  poolTargets: { GK: 17, DEF: 17, MID: 17, FWD: 17 }
+  poolTargets: { GK: 24, DEF: 24, MID: 24, FWD: 24 }
 };
 
 const clamp = (value: number, min = 0, max = 100) => Math.max(min, Math.min(max, Math.round(value)));
@@ -50,15 +52,15 @@ export function validateBid(args: {
   if (amount < minimum) return `Minimum valid bid is ${minimum}M.`;
   if ((amount - settings.minimumBid) % settings.bidIncrement !== 0) return `Bid must follow the ${settings.bidIncrement}M increment.`;
   if (amount > manager.budget) return "You do not have enough budget.";
-  const maximumSquadSize = getMaximumSquadSize(settings.squadSize);
-  if (manager.squad.length >= maximumSquadSize) return `Your squad is full (${getStartingLineupSize(settings.squadSize)} starters + 10 substitutes).`;
+  const maximumSquadSize = getConfiguredSquadSize(settings.squadSize, settings.substituteCount);
+  if (manager.squad.length >= maximumSquadSize) return `Your squad is full (${getStartingLineupSize(settings.squadSize)} starters + ${settings.substituteCount} substitutes).`;
   const catalogueId = footballer?.catalogId ?? footballer?.id;
   if (catalogueId && manager.squad.some(entry => (entry.footballer.catalogId ?? entry.footballer.id) === catalogueId)) {
     return `You already own ${footballer?.name ?? "this footballer"}.`;
   }
-  const playersStillNeededAfterWin = Math.max(0, settings.squadSize - manager.squad.length - 1);
+  const playersStillNeededAfterWin = Math.max(0, maximumSquadSize - manager.squad.length - 1);
   const reserve = playersStillNeededAfterWin * settings.minimumBid;
-  if (manager.budget - amount < reserve) return `Keep at least ${reserve}M to complete your ${settings.squadSize}-player squad target.`;
+  if (manager.budget - amount < reserve) return `Keep at least ${reserve}M to complete your ${maximumSquadSize}-player squad target.`;
   return null;
 }
 
@@ -123,7 +125,12 @@ function greedyLineup(squad: SquadEntry[], formation: FormationDefinition): Line
 }
 
 export function buildAutomaticLineup(squad: SquadEntry[], formationId?: string, requestedStarters?: number): { formationId: string; lineup: LineupAssignment[]; score: number } {
-  const starterTarget = Math.min(getStartingLineupSize(requestedStarters ?? 11), squad.length);
+  // Keep the requested pitch size even if an exhausted auction leaves a squad
+  // incomplete. The greedy builder can return a partial lineup without throwing,
+  // which lets the server finish/recover instead of crashing in a timer callback.
+  const starterTarget = requestedStarters === undefined
+    ? Math.min(11, Math.max(6, squad.length))
+    : getStartingLineupSize(requestedStarters);
   const eligible = FORMATIONS.filter(item => item.slots.length === starterTarget);
   const candidates = formationId
     ? [FORMATION_BY_ID.get(formationId)].filter((item): item is FormationDefinition => !!item && item.slots.length === starterTarget)

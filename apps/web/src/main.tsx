@@ -7,12 +7,13 @@ import {
   FORMATIONS,
   FORMATION_BY_ID,
   getOpeningBid,
-  getMaximumSquadSize,
+  getConfiguredSquadSize,
+  getMinimumFootballersRequired,
   getStartingLineupSize,
   getSquadPositionTargets,
   getFootballerRoles,
   getRoleFitLabel,
-  MAX_SUBSTITUTES,
+  type AuctionStatePatch,
   type BotDifficulty,
   type ClientToServerEvents,
   type Footballer,
@@ -29,6 +30,7 @@ import {
   type RoomDirectoryFilters,
   type RoomState,
   type SquadSize,
+  type SubstituteCount,
   type ServerToClientEvents,
   type SquadEntry
 } from "@auction-eleven/shared";
@@ -65,6 +67,62 @@ const createSession = () => {
 };
 const sessionId = createSession();
 
+type PerformancePreference = "auto" | "quality" | "performance";
+type EffectivePerformanceMode = "quality" | "performance";
+
+function resolvePerformanceMode(preference: PerformancePreference): EffectivePerformanceMode {
+  if (preference !== "auto") return preference;
+  const reducedMotion = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 8;
+  const cores = navigator.hardwareConcurrency ?? 8;
+  return reducedMotion || memory <= 4 || cores <= 4 ? "performance" : "quality";
+}
+
+class AppErrorBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean; message: string }> {
+  state = { failed: false, message: "" };
+  static getDerivedStateFromError(error: unknown) {
+    return { failed: true, message: error instanceof Error ? error.message : "The interface hit an unexpected error." };
+  }
+  componentDidCatch(error: unknown) { console.error("Auction Eleven UI boundary", error); }
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return <main className="recovery-screen"><section className="panel recovery-card"><div className="eyebrow">SAFE RECOVERY</div><h1>The game UI recovered from an error.</h1><p>{this.state.message}</p><p>Your room/session token is still stored. Retry the interface or reconnect without deleting the active multiplayer seat.</p><div><button className="primary" onClick={() => this.setState({ failed: false, message: "" })}>Retry interface</button><button className="secondary" onClick={() => { socket.disconnect(); socket.connect(); this.setState({ failed: false, message: "" }); }}>Reconnect</button></div></section></main>;
+  }
+}
+
+function useBackClosable(open: boolean, onClose: () => void, key: string) {
+  const pushed = useRef(false);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    if (!open) return;
+    const body = document.body;
+    const count = Number(body.dataset.aeOverlayCount ?? "0") + 1;
+    body.dataset.aeOverlayCount = String(count);
+    body.classList.add("ae-overlay-open");
+    if (!pushed.current) {
+      window.history.pushState({ ...(window.history.state ?? {}), aeOverlay: key }, "", window.location.href);
+      pushed.current = true;
+    }
+    const onPopState = (event: PopStateEvent) => {
+      if (!pushed.current || event.state?.aeOverlay === key) return;
+      pushed.current = false;
+      closeRef.current();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      const nextCount = Math.max(0, Number(body.dataset.aeOverlayCount ?? "1") - 1);
+      body.dataset.aeOverlayCount = String(nextCount);
+      if (nextCount === 0) body.classList.remove("ae-overlay-open");
+    };
+  }, [open, key]);
+  return React.useCallback(() => {
+    if (pushed.current) window.history.back();
+    else onClose();
+  }, [onClose]);
+}
+
 function releaseDocumentScrollLock() {
   const html = document.documentElement;
   const body = document.body;
@@ -84,7 +142,8 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 const POSITIONS: Position[] = ["GK", "DEF", "MID", "FWD"];
 const POSITION_NAMES: Record<Position, string> = { GK: "Goalkeepers", DEF: "Defenders", MID: "Midfielders", FWD: "Forwards" };
 const MANAGER_LIMITS: ManagerLimit[] = [2, 3, 4, 5, 6, 7, 8];
-const SQUAD_SIZES: SquadSize[] = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+const SQUAD_SIZES: SquadSize[] = [6, 7, 8, 9, 10, 11];
+const SUBSTITUTE_COUNTS: SubstituteCount[] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 const BOT_DIFFICULTIES: BotDifficulty[] = ["Amateur", "Professional", "World Class", "Legendary"];
 const PRICING_MODES: Array<{ id: PricingMode; title: string; description: string }> = [
   { id: "normal", title: "Normal", description: "Every footballer opens at the same minimum bid." },
@@ -217,6 +276,8 @@ function App() {
   const [reaction, setReaction] = useState<{ managerName: string; reaction: string; at: number } | null>(null);
   const [connected, setConnected] = useState(socket.connected);
   const [isLoading, setIsLoading] = useState(() => !sessionStorage.getItem("ae_intro_seen"));
+  const [performancePreference, setPerformancePreference] = useState<PerformancePreference>(() => (localStorage.getItem("ae_performance") as PerformancePreference | null) ?? "auto");
+  const ignoredRoomRef = useRef<string | null>(null);
 
   useEffect(() => {
     const updateViewportHeight = () => {
@@ -239,26 +300,84 @@ function App() {
     };
   }, []);
 
+  const effectivePerformance = resolvePerformanceMode(performancePreference);
   useEffect(() => {
-    socket.on("connect", () => {
+    document.documentElement.dataset.aePerformance = effectivePerformance;
+    localStorage.setItem("ae_performance", performancePreference);
+  }, [effectivePerformance, performancePreference]);
+
+  useEffect(() => {
+    const handleConnect = () => {
       setConnected(true);
       const code = localStorage.getItem("ae_room");
-      if (code) socket.emit("room:resume", { code, sessionId }, response => { if (response.ok) setManagerId(response.data.managerId); });
-    });
-    socket.on("disconnect", () => setConnected(false));
-    socket.on("room:state", setState);
-    socket.on("room:error", setError);
-    socket.on("room:reaction", value => {
-      setReaction(value);
-      setTimeout(() => setReaction(null), 1800);
-    });
-    return () => {
-      socket.off("connect");
-      socket.off("disconnect");
-      socket.off("room:state");
-      socket.off("room:error");
-      socket.off("room:reaction");
+      if (code) socket.emit("room:resume", { code, sessionId }, response => {
+        if (response.ok) { setManagerId(response.data.managerId); return; }
+        localStorage.removeItem("ae_room");
+        localStorage.removeItem("ae_manager");
+        setManagerId(null);
+        setState(null);
+        setError(response.error);
+      });
     };
+    const handleDisconnect = () => setConnected(false);
+    const handleRoomState = (next: RoomState) => {
+      if (ignoredRoomRef.current === next.code) return;
+      setState(current => current?.code === next.code && current.version > next.version ? current : next);
+    };
+    const handleAuctionPatch = (patch: AuctionStatePatch) => {
+      if (ignoredRoomRef.current === patch.code) return;
+      setState(current => {
+        if (!current || current.code !== patch.code || current.roundId !== patch.roundId || current.version >= patch.version) return current;
+        return {
+          ...current,
+          version: patch.version,
+          currentBid: patch.currentBid,
+          highestBidderId: patch.highestBidderId,
+          endsAt: patch.endsAt,
+          bidHistory: patch.bidHistory,
+          passedManagerIds: patch.passedManagerIds
+        };
+      });
+    };
+    const handleRoomError = (message: string) => setError(message);
+    let reactionTimer: number | null = null;
+    const handleReaction = (value: { managerName: string; reaction: string; at: number }) => {
+      setReaction(value);
+      if (reactionTimer !== null) window.clearTimeout(reactionTimer);
+      reactionTimer = window.setTimeout(() => setReaction(null), 1800);
+    };
+    socket.on("connect", handleConnect);
+    socket.on("disconnect", handleDisconnect);
+    socket.on("room:state", handleRoomState);
+    socket.on("room:auctionPatch", handleAuctionPatch);
+    socket.on("room:error", handleRoomError);
+    socket.on("room:reaction", handleReaction);
+    if (socket.connected) handleConnect();
+    return () => {
+      socket.off("connect", handleConnect);
+      socket.off("disconnect", handleDisconnect);
+      socket.off("room:state", handleRoomState);
+      socket.off("room:auctionPatch", handleAuctionPatch);
+      socket.off("room:error", handleRoomError);
+      socket.off("room:reaction", handleReaction);
+      if (reactionTimer !== null) window.clearTimeout(reactionTimer);
+    };
+  }, []);
+
+  useEffect(() => {
+    // Always keep one in-app root entry behind rooms. This prevents the first
+    // browser/system Back action from immediately closing or leaving the site.
+    const current = window.history.state as { aeApp?: boolean; aeRoom?: string } | null;
+    if (current?.aeApp) return;
+    const url = new URL(window.location.href);
+    const savedRoom = localStorage.getItem("ae_room");
+    const queryRoom = url.searchParams.get("room")?.toUpperCase();
+    if (savedRoom && queryRoom === savedRoom.toUpperCase()) {
+      url.searchParams.delete("room");
+      window.history.replaceState({ aeApp: true, aeRoot: true }, "", `${url.pathname}${url.search}${url.hash}`);
+    } else {
+      window.history.replaceState({ ...(current ?? {}), aeApp: true, aeRoot: true }, "", window.location.href);
+    }
   }, []);
 
   const finishLoading = React.useCallback(() => {
@@ -266,9 +385,15 @@ function App() {
     setIsLoading(false);
   }, []);
   const saveSeat = (code: string, id: string) => {
+    ignoredRoomRef.current = null;
     localStorage.setItem("ae_room", code);
     localStorage.setItem("ae_manager", id);
     setManagerId(id);
+    const url = new URL(window.location.href);
+    url.searchParams.set("room", code);
+    const current = window.history.state as { aeRoom?: string } | null;
+    if (current?.aeRoom === code) window.history.replaceState({ ...(current ?? {}), aeApp: true, aeRoom: code }, "", `${url.pathname}${url.search}${url.hash}`);
+    else window.history.pushState({ aeApp: true, aeRoom: code }, "", `${url.pathname}${url.search}${url.hash}`);
   };
   useEffect(() => {
     const phase = state?.phase;
@@ -285,14 +410,15 @@ function App() {
     return undefined;
   }, [state?.phase]);
 
-  const leave = () => {
-    if (state && state.phase !== "lobby" && state.phase !== "finished") {
+  const leave = (force = false) => {
+    if (!force && state && state.phase !== "lobby" && state.phase !== "finished") {
       const message = state.isSolo
         ? "Leave this Solo Practice match? Your current progress will be lost."
         : "Leave this live room? Your manager will remain in the match as disconnected.";
       if (!confirm(message)) return;
     }
     const finish = () => {
+      if (state?.code) ignoredRoomRef.current = state.code;
       localStorage.removeItem("ae_room");
       localStorage.removeItem("ae_manager");
       setManagerId(null);
@@ -301,15 +427,49 @@ function App() {
       window.history.replaceState(null, "", window.location.pathname);
       window.scrollTo({ top: 0, behavior: "smooth" });
     };
-    if (!state || !managerId) { finish(); return; }
+    if (!state || !managerId || !socket.connected) { finish(); return; }
+    let completed = false;
+    const finishOnce = () => { if (completed) return; completed = true; finish(); };
+    const fallback = window.setTimeout(finishOnce, 1200);
     socket.emit("room:leave", { code: state.code }, response => {
+      window.clearTimeout(fallback);
       if (!response.ok) setError(response.error);
-      finish();
+      finishOnce();
     });
   };
 
+  useEffect(() => {
+    if (!state?.code) return;
+    const current = window.history.state as { aeRoom?: string; aePhase?: string } | null;
+    if (current?.aeRoom !== state.code) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("room", state.code);
+      window.history.pushState({ aeApp: true, aeRoom: state.code, aePhase: state.phase }, "", `${url.pathname}${url.search}${url.hash}`);
+    } else {
+      window.history.replaceState({ ...current, aeApp: true, aeRoom: state.code, aePhase: state.phase }, "", window.location.href);
+    }
+  }, [state?.code, state?.phase]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      if (!state || document.body.classList.contains("ae-overlay-open")) return;
+      if (state.phase !== "lobby" && state.phase !== "finished") {
+        const shouldLeave = window.confirm("Leave this match? Your manager seat can be recovered if you reconnect with this browser.");
+        if (!shouldLeave) {
+          window.history.pushState({ aeApp: true, aeRoom: state.code, aePhase: state.phase }, "", window.location.href);
+          return;
+        }
+      }
+      leave(true);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [state, managerId]);
+
+  const hasSeat = !state || (!!managerId && state.managers.some(manager => manager.id === managerId));
   let page: React.ReactNode;
-  if (!state) page = <Landing socket={socket} saveSeat={saveSeat} setError={setError} />;
+  if (!state) page = <Landing socket={socket} saveSeat={saveSeat} setError={setError} performanceMode={effectivePerformance} />;
+  else if (!hasSeat) page = <main className="recovery-screen"><section className="panel recovery-card"><div className="eyebrow">RESTORING SESSION</div><h1>Reconnecting your manager seat…</h1><p>The server state arrived before your local seat was restored. Your live room remains authoritative.</p></section></main>;
   else if (state.phase === "lobby") page = <Lobby socket={socket} state={state} managerId={managerId!} setError={setError} leave={leave} />;
   else if (state.phase === "formation") page = <FormationRoom socket={socket} state={state} managerId={managerId!} setError={setError} leave={leave} />;
   else if (state.phase === "finished") page = <Results state={state} managerId={managerId!} leave={leave} />;
@@ -319,7 +479,7 @@ function App() {
   return <div className="app-shell">
     <AnimatePresence>{isLoading && <LoadingScreen onComplete={finishLoading} />}</AnimatePresence>
     <div className="ambient-grid" /><div className="noise" />
-    <header className="topbar"><Brand />{state ? <button className="topbar-back" onClick={leave}>← BACK TO MENU</button> : <nav><a href="#home">Home</a><a href="#how">How it works</a><a href="#play">Play</a></nav>}<div className="status-pill"><i className={connected ? "online" : "offline"} />{connected ? "Live server" : "Reconnecting"}</div></header>
+    <header className="topbar"><Brand />{state ? <button className="topbar-back" onClick={() => leave()}>← BACK TO MENU</button> : <nav><a href="#home">Home</a><a href="#how">How it works</a><a href="#play">Play</a></nav>}<div className="topbar-tools"><button className="performance-switch" title="Visual performance mode" onClick={() => setPerformancePreference(current => current === "auto" ? "quality" : current === "quality" ? "performance" : "auto")}>⚙ {performancePreference.toUpperCase()}</button><div className="status-pill"><i className={connected ? "online" : "offline"} />{connected ? "Live server" : "Reconnecting"}</div></div></header>
     {error && <Toast message={error} close={() => setError("")} />}
     {reaction && <div className="reaction-pop"><b>{reaction.managerName}</b> {reaction.reaction}</div>}
     {state && managerId && <RoomChat socket={socket} state={state} managerId={managerId} setError={setError} />}
@@ -333,14 +493,18 @@ function LoadingScreen({ onComplete }: { onComplete: () => void }) {
   useEffect(() => {
     const start = performance.now();
     let frame = 0;
+    let doneTimer: number | null = null;
     const tick = (now: number) => {
       const progress = Math.min(1, (now - start) / 2300);
       setCount(Math.round(progress * 100));
       if (progress < 1) frame = requestAnimationFrame(tick);
-      else setTimeout(onComplete, 300);
+      else doneTimer = window.setTimeout(onComplete, 300);
     };
     frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      if (doneTimer !== null) window.clearTimeout(doneTimer);
+    };
   }, [onComplete]);
   const word = words[Math.min(words.length - 1, Math.floor(count / 25))];
   return <motion.div className="loading-screen" exit={{ opacity: 0, y: "-100%" }} transition={{ duration: .7, ease: [0.76, 0, 0.24, 1] }}>
@@ -354,9 +518,10 @@ function LoadingScreen({ onComplete }: { onComplete: () => void }) {
 function Brand() { return <a href="#home" className="brand"><div className="brand-mark"><span>11</span></div><div><strong>WINNING</strong><em>ELEVEN</em></div></a>; }
 function Toast({ message, close }: { message: string; close: () => void }) { return <div className="toast"><span>!</span><p>{message}</p><button onClick={close}>×</button></div>; }
 
-function HeroVideo() {
+function HeroVideo({ performanceMode }: { performanceMode: EffectivePerformanceMode }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   useEffect(() => {
+    if (performanceMode === "performance") return;
     const video = videoRef.current;
     if (!video) return;
     let disposed = false;
@@ -375,11 +540,12 @@ function HeroVideo() {
       });
     }
     return () => { disposed = true; hls?.destroy(); };
-  }, []);
-  return <video ref={videoRef} className="hero-video" autoPlay muted loop playsInline aria-hidden="true" />;
+  }, [performanceMode]);
+  if (performanceMode === "performance") return <div className="hero-video hero-video-fallback" aria-hidden="true" />;
+  return <video ref={videoRef} className="hero-video" autoPlay muted loop playsInline preload="metadata" aria-hidden="true" />;
 }
 
-function PlayerHeroSlider() {
+function PlayerHeroSlider({ performanceMode }: { performanceMode: EffectivePerformanceMode }) {
   const [index, setIndex] = useState(0);
   const reduceMotion = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -406,10 +572,10 @@ function PlayerHeroSlider() {
           alt={active.name}
           className="player-hero-image"
           style={{ objectPosition: active.objectPosition }}
-          initial={reduceMotion ? false : { opacity: 0, x: 34, scale: 1.025 }}
+          initial={reduceMotion ? false : performanceMode === "performance" ? { opacity: 0 } : { opacity: 0, x: 34, scale: 1.025 }}
           animate={{ opacity: 1, x: 0, scale: 1 }}
-          exit={reduceMotion ? undefined : { opacity: 0, x: -26, scale: .99 }}
-          transition={{ duration: reduceMotion ? 0 : .7, ease: [0.22, 1, 0.36, 1] }}
+          exit={reduceMotion ? undefined : performanceMode === "performance" ? { opacity: 0 } : { opacity: 0, x: -26, scale: .99 }}
+          transition={{ duration: reduceMotion ? 0 : performanceMode === "performance" ? .25 : .7, ease: [0.22, 1, 0.36, 1] }}
         />
       </AnimatePresence>
       <div className="player-hero-overlay" />
@@ -418,23 +584,24 @@ function PlayerHeroSlider() {
   </section>;
 }
 
-function Landing({ socket, saveSeat, setError }: { socket: GameSocket; saveSeat: (code: string, id: string) => void; setError: (value: string) => void }) {
+function Landing({ socket, saveSeat, setError, performanceMode }: { socket: GameSocket; saveSeat: (code: string, id: string) => void; setError: (value: string) => void; performanceMode: EffectivePerformanceMode }) {
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [directPassword, setDirectPassword] = useState("");
   const [createAccess, setCreateAccess] = useState<RoomAccess>("public");
   const [createPassword, setCreatePassword] = useState("");
   const [directoryOpen, setDirectoryOpen] = useState(false);
+  const closeDirectory = useBackClosable(directoryOpen, () => setDirectoryOpen(false), "room-directory");
   const [busy, setBusy] = useState(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const copyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const timeline = gsap.timeline({ defaults: { ease: "power3.out" } });
-    if (titleRef.current) timeline.fromTo(titleRef.current, { opacity: 0, y: 55 }, { opacity: 1, y: 0, duration: 1.15 }, .1);
-    if (copyRef.current) timeline.fromTo(copyRef.current.children, { opacity: 0, y: 20, filter: "blur(9px)" }, { opacity: 1, y: 0, filter: "blur(0px)", stagger: .1, duration: .8 }, .3);
+    if (titleRef.current) timeline.fromTo(titleRef.current, { opacity: 0, y: performanceMode === "performance" ? 14 : 55 }, { opacity: 1, y: 0, duration: performanceMode === "performance" ? .3 : 1.15 }, .1);
+    if (copyRef.current) timeline.fromTo(copyRef.current.children, { opacity: 0, y: performanceMode === "performance" ? 8 : 20, filter: performanceMode === "performance" ? "none" : "blur(9px)" }, { opacity: 1, y: 0, filter: "none", stagger: performanceMode === "performance" ? .03 : .1, duration: performanceMode === "performance" ? .25 : .8 }, .2);
     return () => { timeline.kill(); };
-  }, []);
+  }, [performanceMode]);
 
   const validateName = () => {
     if (name.trim().length < 2) {
@@ -478,7 +645,7 @@ function Landing({ socket, saveSeat, setError }: { socket: GameSocket; saveSeat:
 
   return <main className="landing" id="home">
     <section className="landing-hero">
-      <HeroVideo /><div className="hero-shade" /><div className="hero-fade" /><div className="hero-green-grid" aria-hidden="true" />
+      <HeroVideo performanceMode={performanceMode} /><div className="hero-shade" /><div className="hero-fade" /><div className="hero-green-grid" aria-hidden="true" />
       <div className="hero-layout"><div className="hero-content" ref={copyRef}>
         <div className="eyebrow">THE NEXT-GEN FOOTBALL AUCTION EXPERIENCE · 2026</div>
         <h1 ref={titleRef}>Win the market.<br /><span>Build the eleven.</span></h1>
@@ -486,7 +653,7 @@ function Landing({ socket, saveSeat, setError }: { socket: GameSocket; saveSeat:
         <div className="hero-actions"><a className="primary" href="#play">Enter match hub</a><button className="secondary" onClick={() => setDirectoryOpen(true)}>Find live rooms</button></div>
         <div className="feature-row"><span>Public + locked rooms</span><span>OVR + normal pricing</span><span>2–8 managers</span></div>
       </div>
-      <PlayerHeroSlider /></div><div className="scroll-indicator"><span>SCROLL</span><i /></div>
+      <PlayerHeroSlider performanceMode={performanceMode} /></div><div className="scroll-indicator"><span>SCROLL</span><i /></div>
     </section>
 
     <section className="landing-section" id="how">
@@ -518,7 +685,7 @@ function Landing({ socket, saveSeat, setError }: { socket: GameSocket; saveSeat:
       </section>
     </section>
     <footer className="landing-footer"><Brand /><span>Original football auction game · In-game credits have no monetary value.</span></footer>
-    <AnimatePresence>{directoryOpen && <RoomDirectory socket={socket} managerName={name} saveSeat={saveSeat} setError={setError} onClose={() => setDirectoryOpen(false)} />}</AnimatePresence>
+    <AnimatePresence>{directoryOpen && <RoomDirectory socket={socket} managerName={name} saveSeat={saveSeat} setError={setError} onClose={closeDirectory} />}</AnimatePresence>
   </main>;
 }
 
@@ -528,6 +695,7 @@ function RoomDirectory({ socket, managerName, saveSeat, setError, onClose }: { s
   const [joiningCode, setJoiningCode] = useState("");
   const [passwordRoom, setPasswordRoom] = useState<RoomDirectoryEntry | null>(null);
   const [password, setPassword] = useState("");
+  const closePasswordRoom = useBackClosable(Boolean(passwordRoom), () => setPasswordRoom(null), "room-password");
   const [managerLimit, setManagerLimit] = useState<"all" | ManagerLimit>("all");
   const [pricingMode, setPricingMode] = useState<"all" | PricingMode>("all");
   const [access, setAccess] = useState<"all" | RoomAccess>("all");
@@ -570,7 +738,6 @@ function RoomDirectory({ socket, managerName, saveSeat, setError, onClose }: { s
       setJoiningCode("");
       if (!response.ok) setError(response.error);
       else {
-        onClose();
         saveSeat(response.data.code, response.data.managerId);
       }
     });
@@ -593,7 +760,7 @@ function RoomDirectory({ socket, managerName, saveSeat, setError, onClose }: { s
           const full = room.openSlots < 1;
           return <article className={`directory-room ${full ? "full" : ""}`} key={room.code}>
             <div className="directory-room-icon">{room.hasPassword ? "◆" : "◎"}</div>
-            <div className="directory-room-main"><div><strong>{room.hostName}'s room</strong><span className={room.hasPassword ? "locked" : "open"}>{room.hasPassword ? "PASSWORD" : "OPEN"}</span></div><small>Code {room.code} · {room.squadSize}-player squad · {room.auctionSeconds}s rounds</small><div className="directory-room-tags"><span>{room.pricingMode === "ovr_scaled" ? "OVR PRICING" : "NORMAL PRICING"}</span><span>{room.managerLimit} MANAGER ROOM</span></div></div>
+            <div className="directory-room-main"><div><strong>{room.hostName}'s room</strong><span className={room.hasPassword ? "locked" : "open"}>{room.hasPassword ? "PASSWORD" : "OPEN"}</span></div><small>Code {room.code} · {getStartingLineupSize(room.squadSize)} starters + {room.substituteCount} subs · {room.auctionSeconds}s rounds</small><div className="directory-room-tags"><span>{room.pricingMode === "ovr_scaled" ? "OVR PRICING" : "NORMAL PRICING"}</span><span>{room.managerLimit} MANAGER ROOM</span></div></div>
             <div className="directory-occupancy"><div><b>{room.managerCount}</b><span>/{room.managerLimit}</span></div><small>{full ? "ROOM FULL" : `${room.openSlots} OPEN`}</small></div>
             <button className="directory-join" disabled={full || joiningCode === room.code} onClick={() => join(room)}>{full ? "FULL" : joiningCode === room.code ? "JOINING…" : room.hasPassword ? "ENTER PASSWORD" : "JOIN ROOM"}</button>
           </article>;
@@ -601,7 +768,7 @@ function RoomDirectory({ socket, managerName, saveSeat, setError, onClose }: { s
       </div>
       <footer className="directory-footer"><span>Rooms disappear from this list when the auction starts.</span><button className="secondary" onClick={onClose}>Close browser</button></footer>
     </motion.section>
-    <AnimatePresence>{passwordRoom && <motion.div className="password-dialog-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={event => { if (event.target === event.currentTarget) setPasswordRoom(null); }}><motion.form className="password-dialog" initial={{ y: 24, scale: .96 }} animate={{ y: 0, scale: 1 }} exit={{ y: 18, scale: .97 }} onSubmit={event => { event.preventDefault(); join(passwordRoom, password); }}><span className="password-room-icon">◆</span><div className="eyebrow">LOCKED ROOM · {passwordRoom.code}</div><h3>Enter room password</h3><p>{passwordRoom.hostName}'s room has {passwordRoom.openSlots} seat{passwordRoom.openSlots === 1 ? "" : "s"} remaining.</p><input autoFocus type="password" minLength={4} maxLength={32} value={password} onChange={event => setPassword(event.target.value)} placeholder="Room password" autoComplete="current-password" /><div><button type="button" className="secondary" onClick={() => setPasswordRoom(null)}>Cancel</button><button type="submit" className="primary" disabled={password.length < 4 || joiningCode === passwordRoom.code}>{joiningCode === passwordRoom.code ? "Joining…" : "Unlock & join"}</button></div></motion.form></motion.div>}</AnimatePresence>
+    <AnimatePresence>{passwordRoom && <motion.div className="password-dialog-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={event => { if (event.target === event.currentTarget) closePasswordRoom(); }}><motion.form className="password-dialog" initial={{ y: 24, scale: .96 }} animate={{ y: 0, scale: 1 }} exit={{ y: 18, scale: .97 }} onSubmit={event => { event.preventDefault(); join(passwordRoom, password); }}><span className="password-room-icon">◆</span><div className="eyebrow">LOCKED ROOM · {passwordRoom.code}</div><h3>Enter room password</h3><p>{passwordRoom.hostName}'s room has {passwordRoom.openSlots} seat{passwordRoom.openSlots === 1 ? "" : "s"} remaining.</p><input autoFocus type="password" minLength={4} maxLength={32} value={password} onChange={event => setPassword(event.target.value)} placeholder="Room password" autoComplete="current-password" /><div><button type="button" className="secondary" onClick={closePasswordRoom}>Cancel</button><button type="submit" className="primary" disabled={password.length < 4 || joiningCode === passwordRoom.code}>{joiningCode === passwordRoom.code ? "Joining…" : "Unlock & join"}</button></div></motion.form></motion.div>}</AnimatePresence>
   </motion.div>;
 }
 
@@ -616,14 +783,27 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
   const me = state.managers.find(manager => manager.id === managerId)!;
   const isHost = state.hostId === managerId;
   const [poolOpen, setPoolOpen] = useState(false);
+  const closePool = useBackClosable(poolOpen, () => setPoolOpen(false), "player-pool");
   const [roomPassword, setRoomPassword] = useState("");
   const counts = useMemo(() => countPool(state.availableFootballers, state.selectedFootballerIds), [state.availableFootballers, state.selectedFootballerIds]);
   const starterCount = getStartingLineupSize(state.settings.squadSize);
-  const requiredSubstitutes = Math.max(0, state.settings.squadSize - starterCount);
-  const substituteCount = MAX_SUBSTITUTES;
-  const requiredPool = state.managers.length * getMaximumSquadSize(state.settings.squadSize);
-  const mirroredPool = state.selectedFootballerIds.length < requiredPool;
-  const startDisabled = state.managers.some(manager => !manager.ready) || !state.poolSelectionValid;
+  const substituteCount = state.settings.substituteCount;
+  const totalSquadSize = getConfiguredSquadSize(state.settings.squadSize, substituteCount);
+  const requiredPool = getMinimumFootballersRequired(state.managers.length, state.settings.squadSize, substituteCount);
+  const availablePool = state.selectedFootballerIds.length;
+  const poolEnough = availablePool >= requiredPool;
+  const requiredGoalkeepers = state.managers.length;
+  const requiredOutfield = state.managers.length * Math.max(0, starterCount - 1);
+  const availableOutfield = counts.DEF + counts.MID + counts.FWD;
+  const formationPoolEnough = counts.GK >= requiredGoalkeepers && availableOutfield >= requiredOutfield;
+  const poolValidationMessage = !poolEnough
+    ? `This setup needs ${requiredPool} footballers, but ${availablePool} are selected.`
+    : counts.GK < requiredGoalkeepers
+      ? `Select at least ${requiredGoalkeepers} goalkeepers so every manager can field one.`
+      : availableOutfield < requiredOutfield
+        ? `Select at least ${requiredOutfield} outfield footballers; only ${availableOutfield} are selected.`
+        : "";
+  const startDisabled = state.managers.some(manager => !manager.ready) || !state.poolSelectionValid || !poolEnough || !formationPoolEnough;
   const changeNumber = (key: "startingBudget" | "auctionSeconds" | "formationSeconds", value: number) => {
     const settings: Partial<GameSettings> = { [key]: value };
     socket.emit("room:updateSettings", { code: state.code, settings }, response => { if (!response.ok) setError(response.error); });
@@ -636,6 +816,12 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
   };
   const changeSquadSize = (squadSize: SquadSize) => {
     socket.emit("room:updateSettings", { code: state.code, settings: { squadSize } }, response => { if (!response.ok) setError(response.error); });
+  };
+  const changeSubstituteCount = (substituteCount: SubstituteCount) => {
+    socket.emit("room:updateSettings", { code: state.code, settings: { substituteCount } }, response => { if (!response.ok) setError(response.error); });
+  };
+  const changeReauctionUnsold = (reauctionUnsold: boolean) => {
+    socket.emit("room:updateSettings", { code: state.code, settings: { reauctionUnsold } }, response => { if (!response.ok) setError(response.error); });
   };
   const changeBotDifficulty = (botDifficulty: BotDifficulty) => {
     socket.emit("room:updateSettings", { code: state.code, settings: { botDifficulty } }, response => { if (!response.ok) setError(response.error); });
@@ -658,8 +844,8 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
 
   return <main className="lobby page">
     <div className="room-return-row"><button className="room-back-button" onClick={leave}><span>←</span><div><b>BACK TO GAME MENU</b><small>Leave this room safely</small></div></button></div>
-    <div className="lobby-head"><div><div className="eyebrow">{state.isSolo ? "SOLO PRACTICE LOBBY" : state.access === "password" ? "PASSWORD MATCH LOBBY" : "PUBLIC MATCH LOBBY"}</div><h1>Managers’ Tunnel</h1><p>Each manager builds {starterCount} starters, reaches a {state.settings.squadSize}-player squad target, and may buy up to {substituteCount} substitutes when budget remains.</p></div><div className="room-code"><span>ROOM CODE</span><strong>{state.code}</strong><button onClick={() => navigator.clipboard.writeText(state.code)}>COPY</button></div></div>
-    <div className="lobby-grid"><section className="panel managers-panel"><div className="panel-title"><h2>Room managers</h2><span>{state.managers.length}/{state.settings.managerLimit}</span></div><div className="manager-cards">{state.managers.map(manager => <div className={`manager-card ${manager.ready ? "ready" : ""}`} key={manager.id}><div className="avatar">{manager.avatar}</div><div><strong>{manager.name}</strong><small>{manager.isHost ? "HOST" : manager.isBot ? "AI MANAGER" : "CHALLENGER"}</small></div><div className="ready-tag">{manager.ready ? "READY" : manager.connected ? "WAITING" : "DISCONNECTED"}</div>{isHost && !manager.connected && !manager.isHost && <button className="replace-ai" onClick={() => socket.emit("room:replaceWithAI", { code: state.code, managerId: manager.id }, response => { if (!response.ok) setError(response.error); })}>REPLACE WITH AI</button>}</div>)}</div><div className="squad-rule-card"><b>{state.settings.squadSize}</b><div><strong>SQUAD TARGET</strong><span>{starterCount} starters{requiredSubstitutes ? ` + at least ${requiredSubstitutes} substitute${requiredSubstitutes === 1 ? "" : "s"}` : ""} · up to {substituteCount} substitutes</span></div></div></section>
+    <div className="lobby-head"><div><div className="eyebrow">{state.isSolo ? "SOLO PRACTICE LOBBY" : state.access === "password" ? "PASSWORD MATCH LOBBY" : "PUBLIC MATCH LOBBY"}</div><h1>Managers’ Tunnel</h1><p>Each manager builds {starterCount} starters + {substituteCount} substitute{substituteCount === 1 ? "" : "s"}. Total squad size: {totalSquadSize}.</p></div><div className="room-code"><span>ROOM CODE</span><strong>{state.code}</strong><button onClick={() => navigator.clipboard.writeText(state.code)}>COPY</button></div></div>
+    <div className="lobby-grid"><section className="panel managers-panel"><div className="panel-title"><h2>Room managers</h2><span>{state.managers.length}/{state.settings.managerLimit}</span></div><div className="manager-cards">{state.managers.map(manager => <div className={`manager-card ${manager.ready ? "ready" : ""}`} key={manager.id}><div className="avatar">{manager.avatar}</div><div><strong>{manager.name}</strong><small>{manager.isHost ? "HOST" : manager.isBot ? "AI MANAGER" : "CHALLENGER"}</small></div><div className="ready-tag">{manager.ready ? "READY" : manager.connected ? "WAITING" : "DISCONNECTED"}</div>{isHost && !manager.connected && !manager.isHost && <button className="replace-ai" onClick={() => socket.emit("room:replaceWithAI", { code: state.code, managerId: manager.id }, response => { if (!response.ok) setError(response.error); })}>REPLACE WITH AI</button>}</div>)}</div><div className="squad-rule-card"><b>{totalSquadSize}</b><div><strong>SQUAD TARGET</strong><span>{starterCount} starters + {substituteCount} substitute{substituteCount === 1 ? "" : "s"}</span></div></div></section>
       <section className="panel settings"><div className="panel-title"><h2>Match setup</h2><span>{isHost ? "HOST CONTROL" : "LOCKED"}</span></div>
         <Setting label="Starting budget" value={`${state.settings.startingBudget}M`}><input disabled={!isHost} type="range" min="300" max="3000" step="50" value={state.settings.startingBudget} onChange={event => changeNumber("startingBudget", +event.target.value)} /></Setting>
         <Setting label="Auction timer" value={`${state.settings.auctionSeconds}s`}><input disabled={!isHost} type="range" min="10" max="30" step="1" value={state.settings.auctionSeconds} onChange={event => changeNumber("auctionSeconds", +event.target.value)} /></Setting>
@@ -668,14 +854,18 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
         <div className="manager-limit-setting pricing-mode-setting"><div><span>PLAYER STARTING PRICES</span><b>{state.settings.pricingMode === "ovr_scaled" ? "OVR PRICING" : "NORMAL"}</b></div><div className="preset-buttons pricing-mode-buttons">{PRICING_MODES.map(mode => <button disabled={!isHost} className={state.settings.pricingMode === mode.id ? "active" : ""} onClick={() => changePricingMode(mode.id)} key={mode.id}><strong>{mode.title}</strong><small>{mode.description}</small></button>)}</div><small>{state.settings.pricingMode === "ovr_scaled" ? "The opening bid uses each player's OVR and market value, scaled to the room budget." : "Classic mode keeps the same opening bid for every footballer."}</small></div>
         <div className="manager-limit-setting difficulty-setting"><div><span>AI DIFFICULTY</span><b>{state.settings.botDifficulty.toUpperCase()}</b></div><div className="preset-buttons difficulty-buttons">{BOT_DIFFICULTIES.map(level => <button disabled={!isHost || !state.isSolo} className={state.settings.botDifficulty === level ? "active" : ""} onClick={() => changeBotDifficulty(level)} key={level}>{level}</button>)}</div><small>{state.isSolo ? "Higher levels value positional needs, budget timing and late-round bidding more accurately." : "AI difficulty is used in Solo Practice rooms."}</small></div>
         <div className="manager-limit-setting"><div><span>ROOM CAPACITY</span><b>{state.settings.managerLimit} MANAGERS</b></div><div className="preset-buttons compact-presets">{MANAGER_LIMITS.map(limit => <button disabled={!isHost || (!state.isSolo && limit < state.managers.length)} className={state.settings.managerLimit === limit ? "active" : ""} onClick={() => changeManagerLimit(limit)} key={limit}>{limit}</button>)}</div><small>{state.isSolo ? "AI managers are added automatically." : "Rooms support a minimum of 2 and maximum of 8 managers."}</small></div>
-        <div className="manager-limit-setting squad-size-setting"><div><span>SQUAD TARGET</span><b>{state.settings.squadSize} PLAYERS</b></div><div className="preset-buttons squad-size-buttons">{SQUAD_SIZES.map(size => <button disabled={!isHost} className={state.settings.squadSize === size ? "active" : ""} onClick={() => changeSquadSize(size)} key={size}>{size}</button>)}</div><small>{starterCount < 11 ? `${starterCount}-a-side starting formation + up to ${MAX_SUBSTITUTES} substitutes.` : `${starterCount} starters${requiredSubstitutes ? ` + at least ${requiredSubstitutes} substitute${requiredSubstitutes === 1 ? "" : "s"}` : ""}; up to ${MAX_SUBSTITUTES} substitutes total.`}</small></div>
-        <div className="pool-target-settings"><div className="setting-heading"><span>ROOM PLAYER QUOTAS</span><b>15–20 PER POSITION</b></div>{POSITIONS.map(position => <label key={position}><span>{position}</span><input disabled={!isHost} type="range" min="15" max="20" value={state.settings.poolTargets[position]} onChange={event => changeTarget(position, +event.target.value)} /><b>{state.settings.poolTargets[position]}</b></label>)}</div>
+        <div className="manager-limit-setting squad-size-setting"><div><span>STARTERS</span><b>{starterCount} PLAYERS</b></div><div className="preset-buttons squad-size-buttons">{SQUAD_SIZES.map(size => <button disabled={!isHost} className={state.settings.squadSize === size ? "active" : ""} onClick={() => changeSquadSize(size)} key={size}>{size}</button>)}</div><small>Choose the starting formation size. Full-size football uses 11 starters.</small></div>
+        <div className="manager-limit-setting substitute-setting"><div><span>SUBSTITUTES</span><b>{substituteCount} SUB{substituteCount === 1 ? "" : "S"}</b></div><div className="preset-buttons substitute-buttons">{SUBSTITUTE_COUNTS.map(count => <button disabled={!isHost} className={substituteCount === count ? "active" : ""} onClick={() => changeSubstituteCount(count)} key={count}>{count}</button>)}</div><small>Total squad size is {totalSquadSize} per manager.</small></div>
+        <div className="manager-limit-setting reauction-setting"><div><span>RE-AUCTION UNSOLD</span><b>{state.settings.reauctionUnsold ? "ON" : "OFF"}</b></div><div className="preset-buttons pricing-mode-buttons"><button disabled={!isHost} className={!state.settings.reauctionUnsold ? "active" : ""} onClick={() => changeReauctionUnsold(false)}><strong>Off</strong><small>Skipped footballers never return.</small></button><button disabled={!isHost} className={state.settings.reauctionUnsold ? "active" : ""} onClick={() => changeReauctionUnsold(true)}><strong>On</strong><small>Unsold players return only after the normal pool ends.</small></button></div></div>
+        <div className="pool-target-settings"><div className="setting-heading"><span>ROOM PLAYER QUOTAS</span><b>15–24 PER POSITION</b></div>{POSITIONS.map(position => <label key={position}><span>{position}</span><input disabled={!isHost} type="range" min="15" max="24" value={state.settings.poolTargets[position]} onChange={event => changeTarget(position, +event.target.value)} /><b>{state.settings.poolTargets[position]}</b></label>)}</div>
         <div className={`pool-summary ${state.poolSelectionValid ? "valid" : "invalid"}`}><div><span>SELECTED ROOM POOL</span><strong>{state.selectedFootballerIds.length} footballers</strong></div><div className="pool-counts">{POSITIONS.map(position => <span key={position}>{position} <b>{counts[position]}/{state.settings.poolTargets[position]}</b></span>)}</div><button onClick={() => setPoolOpen(true)}>{isHost ? "SELECT PLAYERS" : "VIEW PLAYERS"}</button></div>
-        <div className={`capacity-meter ${mirroredPool ? "mirrored" : "unique"}`}><span>{mirroredPool ? "Mirrored auction pool" : "Unique-player auction pool"}</span><b>{state.selectedFootballerIds.length} base / {requiredPool} purchases</b><small>{mirroredPool ? "A footballer may appear for different managers, but never twice in one manager’s squad." : "Every auction card is unique in this room."}</small></div>
+        <div className={`capacity-meter ${poolEnough ? "unique" : "mirrored"}`}><span>{poolEnough ? "Auction pool ready" : "More footballers required"}</span><b>{availablePool} selected / {requiredPool} minimum</b><small>{state.managers.length} manager{state.managers.length === 1 ? "" : "s"} × ({starterCount} starters + {substituteCount} subs) = {requiredPool} minimum footballers. Every selected footballer appears at most once unless re-auction is enabled.</small></div>
         <div className="lobby-actions"><button className={me.ready ? "secondary" : "primary"} onClick={toggleReady}>{me.ready ? "Not Ready" : "I’m Ready"}</button>{isHost && <button className="kickoff" disabled={startDisabled} onClick={start}>START AUCTION ↗</button>}<button className="text-btn" onClick={leave}>← Back to menu</button></div>
         {!state.poolSelectionValid && <p className="setup-warning">Complete every position quota before starting.</p>}
+        {state.poolSelectionValid && poolValidationMessage && <p className="setup-warning">{poolValidationMessage} Adjust substitutes, starters, manager count, or the player pool before kickoff.</p>}
+        {state.poolSelectionValid && !poolEnough && <p className="setup-warning">This setup needs {requiredPool} footballers, but only {availablePool} are selected. Reduce substitutes/managers or increase the player pool.</p>}
       </section></div>
-    {poolOpen && <PlayerPoolModal socket={socket} state={state} isHost={isHost} onClose={() => setPoolOpen(false)} setError={setError} />}
+    {poolOpen && <PlayerPoolModal socket={socket} state={state} isHost={isHost} onClose={closePool} setError={setError} />}
   </main>;
 }
 
@@ -718,7 +908,7 @@ function PlayerPoolModal({ socket, state, isHost, onClose, setError }: { socket:
     });
   };
   const complete = POSITIONS.every(position => counts[position] === state.settings.poolTargets[position]);
-  return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Select room footballers"><section className="pool-modal"><header><div><div className="eyebrow">HOST PLAYER DRAFT</div><h2>Select this room’s footballers</h2><p>Choose exactly 15–20 footballers from every broad position.</p></div><button className="modal-close" onClick={onClose}>×</button></header><div className="pool-toolbar"><div className="position-tabs">{POSITIONS.map(position => <button className={active === position ? "active" : ""} key={position} onClick={() => setActive(position)}><span>{position}</span><b>{counts[position]}/{state.settings.poolTargets[position]}</b></button>)}</div><input value={query} onChange={event => setQuery(event.target.value)} placeholder={`Search ${POSITION_NAMES[active].toLowerCase()}…`} /><button disabled={!isHost} onClick={() => autoFill(false)}>Auto fill {active}</button><button disabled={!isHost} onClick={() => autoFill(true)}>Auto fill all</button></div><div className="pool-grid">{visible.map(player => {
+  return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Select room footballers"><section className="pool-modal"><header><div><div className="eyebrow">HOST PLAYER DRAFT</div><h2>Select this room’s footballers</h2><p>Choose exactly 15–24 footballers from every broad position.</p></div><button className="modal-close" onClick={onClose}>×</button></header><div className="pool-toolbar"><div className="position-tabs">{POSITIONS.map(position => <button className={active === position ? "active" : ""} key={position} onClick={() => setActive(position)}><span>{position}</span><b>{counts[position]}/{state.settings.poolTargets[position]}</b></button>)}</div><input value={query} onChange={event => setQuery(event.target.value)} placeholder={`Search ${POSITION_NAMES[active].toLowerCase()}…`} /><button disabled={!isHost} onClick={() => autoFill(false)}>Auto fill {active}</button><button disabled={!isHost} onClick={() => autoFill(true)}>Auto fill all</button></div><div className="pool-grid">{visible.map(player => {
     const selected = selectedSet.has(player.id);
     const full = !selected && counts[player.position] >= state.settings.poolTargets[player.position];
     return <button type="button" disabled={!isHost || full} onClick={() => toggle(player)} className={`pool-player ${selected ? "selected" : ""}`} key={player.id}><FootballerPhoto player={player} compact /><span className="selection-mark">{selected ? "✓" : "+"}</span><div><strong>{player.name}</strong><small>{player.country} • {player.position}</small><span>OVR {player.overall} • Opens {money(getOpeningBid(state.settings, player))}</span></div></button>;
@@ -727,32 +917,62 @@ function PlayerPoolModal({ socket, state, isHost, onClose, setError }: { socket:
 
 function FootballerPhoto({ player, compact = false }: { player: Footballer; compact?: boolean }) {
   const cacheKey = player.catalogId ?? player.id;
+  const containerRef = useRef<HTMLDivElement>(null);
   const [photo, setPhoto] = useState<FootballerPhoto | undefined>(() => photoCache.get(cacheKey));
   const [failed, setFailed] = useState(false);
+  const [visible, setVisible] = useState(() => !compact || photoCache.has(cacheKey));
+
+  useEffect(() => {
+    if (!compact || visible || photoCache.has(cacheKey)) { setVisible(true); return; }
+    const node = containerRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") { setVisible(true); return; }
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) { setVisible(true); observer.disconnect(); }
+    }, { rootMargin: "180px" });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [cacheKey, compact, visible]);
 
   useEffect(() => {
     let active = true;
     const cached = photoCache.get(cacheKey);
     setPhoto(cached);
     setFailed(false);
-    if (!cached) {
+    if (!cached && visible) {
       loadPhoto(player)
         .then(value => { if (active) setPhoto(value); })
         .catch(() => { if (active) setFailed(true); });
     }
     return () => { active = false; };
-  }, [cacheKey, player]);
+  }, [cacheKey, player, visible]);
 
-  return <div className={`footballer-photo ${compact ? "compact" : ""}`}>{photo ? <><img key={photo.url} src={photo.url} alt={`${player.name} footballer`} loading="lazy" referrerPolicy="no-referrer" /><a href={photo.descriptionUrl} target="_blank" rel="noreferrer" title={`${photo.credit} • ${photo.license}`}>©</a></> : <div className="photo-placeholder"><span>{player.position === "GK" ? "🧤" : "⚽"}</span><small>{failed ? "PHOTO UNAVAILABLE" : "LOADING PHOTO"}</small></div>}</div>;
+  return <div ref={containerRef} className={`footballer-photo ${compact ? "compact" : ""}`}>{photo ? <><img key={photo.url} src={photo.url} alt={`${player.name} footballer`} loading={compact ? "lazy" : "eager"} decoding="async" referrerPolicy="no-referrer" /><a href={photo.descriptionUrl} target="_blank" rel="noreferrer" title={`${photo.credit} • ${photo.license}`}>©</a></> : <div className="photo-placeholder"><span>{player.position === "GK" ? "🧤" : "⚽"}</span><small>{failed ? "PHOTO UNAVAILABLE" : visible ? "LOADING PHOTO" : "PHOTO READY"}</small></div>}</div>;
 }
+
 
 function useCountdown(endsAt: number | null) {
   const [now, setNow] = useState(Date.now());
-  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 100); return () => clearInterval(timer); }, []);
+  useEffect(() => {
+    if (!endsAt) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [endsAt]);
   return endsAt ? Math.max(0, (endsAt - now) / 1000) : 0;
 }
 
-function PlayerCard({ player }: { player: Footballer }) { const roles = getFootballerRoles(player); return <motion.div key={player.id} initial={{ opacity: 0, scale: .94, y: 24 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: .45, ease: [0.22, 1, 0.36, 1] }} className={`player-card rarity-${player.rarity.toLowerCase()}`}><div className="card-top"><span>{player.rarity}</span><b>{roles[0] ?? player.position}</b></div><div className="rating">{player.overall}</div><FootballerPhoto player={player} /><h2>{player.name}</h2><p>{player.country} · Real footballer</p><div className="player-roles" aria-label="Playable positions">{roles.map((role, index) => <span className={index === 0 ? "primary" : ""} key={role}>{role}</span>)}</div><div className="stats"><Stat value={player.pace} label="PAC" /><Stat value={player.shooting} label="SHO" /><Stat value={player.passing} label="PAS" /><Stat value={player.dribbling} label="DRI" /><Stat value={player.defending} label="DEF" /><Stat value={player.physical} label="PHY" /></div><div className="trait">✦ {player.trait}</div></motion.div>; }
+const AuctionTimer = React.memo(function AuctionTimer({ endsAt, durationSeconds }: { endsAt: number | null; durationSeconds: number }) {
+  const seconds = useCountdown(endsAt);
+  const progress = clamp(seconds / Math.max(1, durationSeconds) * 100, 0, 100);
+  return <div className="timer" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><div><strong>{Math.ceil(seconds)}</strong><span>SEC</span></div></div>;
+});
+
+const FormationClock = React.memo(function FormationClock({ endsAt }: { endsAt: number | null }) {
+  const seconds = useCountdown(endsAt);
+  return <div className="formation-clock"><span>LINEUP DEADLINE</span><b>{Math.floor(seconds / 60)}:{String(Math.ceil(seconds % 60)).padStart(2, "0")}</b></div>;
+});
+
+const PlayerCard = React.memo(function PlayerCard({ player }: { player: Footballer }) { const roles = getFootballerRoles(player); return <motion.div key={player.id} initial={{ opacity: 0, scale: .94, y: 24 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: .45, ease: [0.22, 1, 0.36, 1] }} className={`player-card rarity-${player.rarity.toLowerCase()}`}><div className="card-top"><span>{player.rarity}</span><b>{roles[0] ?? player.position}</b></div><div className="rating">{player.overall}</div><FootballerPhoto player={player} /><h2>{player.name}</h2><p>{player.country} · Real footballer</p><div className="player-roles" aria-label="Playable positions">{roles.map((role, index) => <span className={index === 0 ? "primary" : ""} key={role}>{role}</span>)}</div><div className="stats"><Stat value={player.pace} label="PAC" /><Stat value={player.shooting} label="SHO" /><Stat value={player.passing} label="PAS" /><Stat value={player.dribbling} label="DRI" /><Stat value={player.defending} label="DEF" /><Stat value={player.physical} label="PHY" /></div><div className="trait">✦ {player.trait}</div></motion.div>; });
 function Stat({ value, label }: { value: number; label: string }) { return <div><b>{value}</b><span>{label}</span></div>; }
 
 function squadPositionCounts(squad: SquadEntry[]): PoolTargets {
@@ -761,11 +981,11 @@ function squadPositionCounts(squad: SquadEntry[]): PoolTargets {
   return counts;
 }
 
-function SquadTracker({ squad, currentPosition, squadSize }: { squad: SquadEntry[]; currentPosition?: Position; squadSize: number }) {
+const SquadTracker = React.memo(function SquadTracker({ squad, currentPosition, squadSize, substituteCount }: { squad: SquadEntry[]; currentPosition?: Position; squadSize: number; substituteCount: number }) {
   const [expanded, setExpanded] = useState(false);
   const counts = squadPositionCounts(squad);
-  const targets = getSquadPositionTargets(squadSize);
-  const maximumSquadSize = getMaximumSquadSize(squadSize);
+  const targets = getSquadPositionTargets(getStartingLineupSize(squadSize));
+  const maximumSquadSize = getConfiguredSquadSize(squadSize, substituteCount);
   return <section className={`squad-tracker ${expanded ? "expanded" : ""}`}>
     <button className="tracker-head" onClick={() => setExpanded(value => !value)}><div><span>MY AUCTION SQUAD</span><strong>{squad.length}<i>/{maximumSquadSize}</i></strong></div><b>{expanded ? "−" : "+"}</b></button>
     <div className="position-tracker">{POSITIONS.map(position => {
@@ -774,12 +994,10 @@ function SquadTracker({ squad, currentPosition, squadSize }: { squad: SquadEntry
     })}</div>
     {expanded && <div className="tracker-list">{squad.length ? squad.slice().reverse().map(entry => <div key={entry.footballer.id}><span>{entry.footballer.position}</span><b>{entry.footballer.name}</b><small>{entry.price}M</small></div>) : <p>No signings yet. Use the targets above to plan your bids.</p>}</div>}
   </section>;
-}
+});
 
 function Arena({ socket, state, managerId, setError, leave }: { socket: GameSocket; state: RoomState; managerId: string; setError: (value: string) => void; leave: () => void }) {
   const me = state.managers.find(manager => manager.id === managerId)!;
-  const seconds = useCountdown(state.endsAt);
-  const progress = clamp(seconds / state.settings.auctionSeconds * 100, 0, 100);
   const [custom, setCustom] = useState("");
   const [sending, setSending] = useState(false);
   const [compactMode, setCompactMode] = useState(() => localStorage.getItem("ae_compact") !== "0");
@@ -810,16 +1028,16 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
   }, [state.roundIndex]);
   const openingBid = getOpeningBid(state.settings, state.currentFootballer);
   const minimum = state.currentBid === 0 ? openingBid : state.currentBid + state.settings.bidIncrement;
-  const maximumSquadSize = getMaximumSquadSize(state.settings.squadSize);
+  const maximumSquadSize = getConfiguredSquadSize(state.settings.squadSize, state.settings.substituteCount);
   const starterCount = getStartingLineupSize(state.settings.squadSize);
   const goalkeeperCount = me.squad.filter(entry => entry.footballer.position === "GK").length;
   const outfieldCount = me.squad.length - goalkeeperCount;
   const canFormLineup = goalkeeperCount >= 1 && outfieldCount >= starterCount - 1;
   const hasPassed = (state.passedManagerIds ?? []).includes(managerId);
-  const canComplete = me.squad.length >= state.settings.squadSize && canFormLineup && !me.auctionComplete;
-  const cannotBid = sending || me.auctionComplete || hasPassed || seconds <= 0 || me.squad.length >= maximumSquadSize || me.budget < minimum;
+  const canComplete = me.squad.length >= maximumSquadSize && canFormLineup && !me.auctionComplete;
+  const cannotBid = sending || me.auctionComplete || hasPassed || !state.endsAt || me.squad.length >= maximumSquadSize || me.budget < minimum;
   const passOnPlayer = () => {
-    if (hasPassed || seconds <= 0) return;
+    if (hasPassed || !state.endsAt) return;
     setSending(true);
     socket.emit("auction:pass", { code: state.code, roundId: state.roundId }, response => {
       setSending(false);
@@ -846,15 +1064,15 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
   const quitSolo = () => leave();
   if (state.phase === "round_result") return <RoundResult state={state} />;
   return <main className={`arena page ${compactMode ? "compact-mode" : "comfortable-mode"}`}><div className="arena-top"><div><span>ROOM {state.code}</span><b>ROUND {state.roundIndex + 1}/{state.totalRounds}</b></div><div className="arena-controls"><div className="live"><i /> LIVE AUCTION</div><div className="secure-badge" title="Budgets and bids are validated by the server">🔒 SERVER SECURE</div><button type="button" onClick={enterFullscreen}>⛶ {isFullscreen ? "EXIT FULLSCREEN" : "FULLSCREEN"}</button><button type="button" onClick={toggleCompactMode}>{compactMode ? "COMFORT" : "COMPACT"}</button><button aria-label="Send fire reaction" onClick={() => socket.emit("room:reaction", { code: state.code, reaction: "🔥" })}>🔥</button>{state.isSolo && <button className="quit-match" onClick={quitSolo}>QUIT MATCH</button>}</div></div>
-    <div className="arena-grid"><div className="arena-left-stack"><SquadTracker squad={me.squad} currentPosition={state.currentFootballer?.position} squadSize={state.settings.squadSize} /><aside className="panel manager-board"><h3>ROOM SQUADS</h3>{state.managers.map(manager => <div className={`manager-line ${manager.id === state.highestBidderId ? "leading" : ""} ${manager.id === managerId ? "you" : ""}`} key={manager.id}><span className="mini-avatar">{manager.avatar}</span><div><b>{manager.name}</b><small>{manager.auctionComplete ? "SQUAD COMPLETE" : `${manager.squad.length}/${getMaximumSquadSize(state.settings.squadSize)} · ${Math.max(0, getMaximumSquadSize(state.settings.squadSize) - manager.squad.length)} spots left`}</small></div><strong>{money(manager.budget)}</strong></div>)}</aside></div>
-      <section className="auction-stage">{state.currentFootballer && <PlayerCard player={state.currentFootballer} />}<div className="auction-meta"><div className="timer" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><div><strong>{Math.ceil(seconds)}</strong><span>SEC</span></div></div><div className="current-price"><span>{state.currentBid ? "CURRENT BID" : state.settings.pricingMode === "ovr_scaled" ? "OVR OPENING PRICE" : "OPENING BID"}</span><strong>{money(state.currentBid || openingBid)}</strong><p>{state.highestBidderId ? `${state.managers.find(manager => manager.id === state.highestBidderId)?.name} leads` : state.settings.pricingMode === "ovr_scaled" ? `${state.currentFootballer?.overall ?? "—"} OVR value mode` : "Normal price mode"}</p></div></div></section>
+    <div className="arena-grid"><div className="arena-left-stack"><SquadTracker squad={me.squad} currentPosition={state.currentFootballer?.position} squadSize={state.settings.squadSize} substituteCount={state.settings.substituteCount} /><aside className="panel manager-board"><h3>ROOM SQUADS</h3>{state.managers.map(manager => <div className={`manager-line ${manager.id === state.highestBidderId ? "leading" : ""} ${manager.id === managerId ? "you" : ""}`} key={manager.id}><span className="mini-avatar">{manager.avatar}</span><div><b>{manager.name}</b><small>{manager.auctionComplete ? "SQUAD COMPLETE" : `${manager.squad.length}/${maximumSquadSize} · ${Math.max(0, maximumSquadSize - manager.squad.length)} spots left`}</small></div><strong>{money(manager.budget)}</strong></div>)}</aside></div>
+      <section className="auction-stage">{state.currentFootballer && <PlayerCard player={state.currentFootballer} />}<div className="auction-meta"><AuctionTimer endsAt={state.endsAt} durationSeconds={state.settings.auctionSeconds} /><div className="current-price"><span>{state.currentBid ? "CURRENT BID" : state.settings.pricingMode === "ovr_scaled" ? "OVR OPENING PRICE" : "OPENING BID"}</span><strong>{money(state.currentBid || openingBid)}</strong><p>{state.highestBidderId ? `${state.managers.find(manager => manager.id === state.highestBidderId)?.name} leads` : state.settings.pricingMode === "ovr_scaled" ? `${state.currentFootballer?.overall ?? "—"} OVR value mode` : "Normal price mode"}</p></div></div></section>
       <aside className="panel bid-feed"><h3>BID FEED</h3>{state.bidHistory.length === 0 ? <div className="empty-feed">No bids yet.<br />Make the first move.</div> : state.bidHistory.map((bid, index) => <div className={`feed-row ${index === 0 ? "latest" : ""}`} key={bid.id}><span>{bid.managerName}</span><b>{money(bid.amount)}</b></div>)}</aside></div>
-    <div className="bid-dock"><div className="budget-read"><span>YOUR BUDGET</span><b>{money(me.budget)}</b><small>{me.squad.length}/{maximumSquadSize} signed · {Math.max(0, state.settings.squadSize - me.squad.length)} players to target · {Math.max(0, me.squad.length - getStartingLineupSize(state.settings.squadSize))}/10 subs · {Math.max(0, maximumSquadSize - me.squad.length) ? Math.floor(me.budget / Math.max(1, maximumSquadSize - me.squad.length)) : me.budget}M per open slot</small></div><div className="quick-bids"><button disabled={cannotBid} onClick={() => actualBid(minimum)}>BID {money(minimum)}</button><button disabled={cannotBid || me.budget < minimum + 5} onClick={() => actualBid(minimum + 5)}>+5M</button><button disabled={cannotBid || me.budget < minimum + 10} onClick={() => actualBid(minimum + 10)}>+10M</button><button type="button" className={`pass-player ${hasPassed ? "passed" : ""}`} disabled={sending || me.auctionComplete || hasPassed || seconds <= 0 || me.squad.length >= maximumSquadSize || me.budget < openingBid} onClick={passOnPlayer}>{hasPassed ? "PASSED" : "PASS PLAYER"}</button><button type="button" className={`complete-auction ${me.auctionComplete ? "done" : ""}`} disabled={sending || !canComplete} onClick={completeSquad}>{me.auctionComplete ? "SQUAD COMPLETE ✓" : `I'M DONE (${me.squad.length}/${state.settings.squadSize})`}</button></div><form className="custom-bid" onSubmit={event => { event.preventDefault(); if (custom) actualBid(+custom); }}><input inputMode="numeric" enterKeyHint="send" aria-label="Custom bid amount" value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ""))} placeholder="CUSTOM BID" /><button type="submit" disabled={cannotBid || !custom || +custom > me.budget}>PLACE</button></form></div></main>;
+    <div className="bid-dock"><div className="budget-read"><span>YOUR BUDGET</span><b>{money(me.budget)}</b><small>{me.squad.length}/{maximumSquadSize} signed · {Math.max(0, maximumSquadSize - me.squad.length)} players to target · {Math.max(0, me.squad.length - starterCount)}/{state.settings.substituteCount} subs · {Math.max(0, maximumSquadSize - me.squad.length) ? Math.floor(me.budget / Math.max(1, maximumSquadSize - me.squad.length)) : me.budget}M per open slot</small></div><div className="quick-bids"><button disabled={cannotBid} onClick={() => actualBid(minimum)}>BID {money(minimum)}</button><button disabled={cannotBid || me.budget < minimum + 5} onClick={() => actualBid(minimum + 5)}>+5M</button><button disabled={cannotBid || me.budget < minimum + 10} onClick={() => actualBid(minimum + 10)}>+10M</button><button type="button" className={`pass-player ${hasPassed ? "passed" : ""}`} disabled={sending || me.auctionComplete || hasPassed || !state.endsAt || me.squad.length >= maximumSquadSize || me.budget < openingBid} onClick={passOnPlayer}>{hasPassed ? "PASSED" : "PASS PLAYER"}</button><button type="button" className={`complete-auction ${me.auctionComplete ? "done" : ""}`} disabled={sending || !canComplete} onClick={completeSquad}>{me.auctionComplete ? "SQUAD COMPLETE ✓" : `I'M DONE (${me.squad.length}/${maximumSquadSize})`}</button></div><form className="custom-bid" onSubmit={event => { event.preventDefault(); if (custom) actualBid(+custom); }}><input inputMode="numeric" enterKeyHint="send" aria-label="Custom bid amount" value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ""))} placeholder="CUSTOM BID" /><button type="submit" disabled={cannotBid || !custom || +custom > me.budget}>PLACE</button></form></div></main>;
 }
 
 function RoundResult({ state }: { state: RoomState }) {
-  const label = state.lastWinner?.automatic ? "AUTO SIGNED" : state.lastWinner ? "SOLD!" : "RE-AUCTION";
-  return <main className="round-result"><div className="result-burst">{label}</div>{state.lastWinner ? <><div className="winner-avatar">{state.lastWinner.automatic ? "⚙️" : "🏆"}</div><h1>{state.lastWinner.footballerName}</h1><p>{state.lastWinner.automatic ? "assigned to complete the squad of" : "joins"} <strong>{state.lastWinner.managerName}</strong></p><div className="sold-price">{money(state.lastWinner.amount)}</div></> : <><h1>No manager bid</h1><p>This footballer will return later in the auction.</p></>}<div className="loading-bar"><i /></div></main>;
+  const label = state.lastWinner?.automatic ? "AUTO SIGNED" : state.lastWinner ? "SOLD!" : state.settings.reauctionUnsold ? "UNSOLD · LATER ROUND" : "SKIPPED";
+  return <main className="round-result"><div className="result-burst">{label}</div>{state.lastWinner ? <><div className="winner-avatar">{state.lastWinner.automatic ? "⚙️" : "🏆"}</div><h1>{state.lastWinner.footballerName}</h1><p>{state.lastWinner.automatic ? "assigned to complete the squad of" : "joins"} <strong>{state.lastWinner.managerName}</strong></p><div className="sold-price">{money(state.lastWinner.amount)}</div></> : <><h1>No manager bid</h1><p>{state.settings.reauctionUnsold ? "This footballer may return after the normal auction pool ends." : "This footballer is removed from this match."}</p></>}<div className="loading-bar"><i /></div></main>;
 }
 
 function rolePosition(role: LineupRole): Position {
@@ -866,13 +1084,14 @@ function rolePosition(role: LineupRole): Position {
 
 function clientRoleScore(player: Footballer, role: LineupRole): number {
   const required = rolePosition(role);
-  const position = player.position === required ? 100 : player.secondary.includes(required) ? 76 : 25;
+  const roles = getFootballerRoles(player);
+  const position = player.primaryRole === role ? 100 : roles.includes(role) ? 88 : player.position === required ? 72 : player.secondary.includes(required) ? 58 : 22;
   let ability = player.overall;
   if (role === "GK") ability = player.goalkeeping;
   else if (["LB", "CB", "RB", "LWB", "RWB"].includes(role)) ability = player.defending * .45 + player.physical * .25 + player.pace * .18 + player.passing * .12;
   else if (["CDM", "CM", "CAM", "LM", "RM"].includes(role)) ability = player.passing * .34 + player.dribbling * .24 + player.physical * .16 + player.defending * .13 + player.shooting * .13;
   else ability = player.shooting * .38 + player.pace * .27 + player.dribbling * .22 + player.passing * .13;
-  return ability * .72 + position * .28;
+  return ability * .68 + position * .32;
 }
 
 function autoArrange(squad: SquadEntry[], formation: FormationDefinition): Record<string, string> {
@@ -901,7 +1120,6 @@ function FormationRoom({ socket, state, managerId, setError, leave }: { socket: 
   const [draggingPlayer, setDraggingPlayer] = useState<string | null>(null);
   const [dragPoint, setDragPoint] = useState<{ x: number; y: number } | null>(null);
   const pointerDrag = useRef<{ id: string; pointerId: number; startX: number; startY: number; active: boolean; timer: number | null } | null>(null);
-  const seconds = useCountdown(state.formationEndsAt);
   const formation = FORMATION_BY_ID.get(formationId) ?? validFormations[0]!;
   const playerMap = useMemo(() => new Map(me.squad.map(entry => [entry.footballer.id, entry.footballer])), [me.squad]);
   const draftKey = `ae_formation_${state.code}_${managerId}`;
@@ -1087,7 +1305,7 @@ function FormationRoom({ socket, state, managerId, setError, leave }: { socket: 
   if (me.lineupSubmitted) return <main className="formation-wait page"><div className="formation-wait-card"><div className="formation-check">✓</div><div className="eyebrow">LINEUP LOCKED</div><h1>{FORMATION_BY_ID.get(me.formationId ?? "")?.name}</h1><p>Your {starterTarget}-player formation{substituteTarget ? ` and ${substituteTarget} substitute${substituteTarget === 1 ? "" : "s"}` : ""} are ready. Waiting for the remaining managers.</p><div className="submission-progress"><span>{selectedManagerCount}/{state.managers.length} submitted</span><i><b style={{ width: `${selectedManagerCount / state.managers.length * 100}%` }} /></i></div><div className="formation-manager-status">{state.managers.map(manager => <span className={manager.lineupSubmitted ? "done" : ""} key={manager.id}>{manager.avatar} {manager.name} <b>{manager.lineupSubmitted ? "READY" : "CHOOSING"}</b></span>)}</div>{state.isSolo && <button className="danger-outline" onClick={quitSolo}>Quit Solo Match</button>}</div></main>;
 
   const dragged = draggingPlayer ? playerMap.get(draggingPlayer) : null;
-  return <main className="formation-page page"><header className="formation-header"><div><div className="eyebrow">POST-AUCTION TEAM SETUP</div><h1>Choose formation & assemble your team</h1><p>Drag every player into position. Primary and secondary roles receive the best rating.</p></div><div className="formation-clock"><span>LINEUP DEADLINE</span><b>{Math.floor(seconds / 60)}:{String(Math.ceil(seconds % 60)).padStart(2, "0")}</b></div></header>
+  return <main className="formation-page page"><header className="formation-header"><div><div className="eyebrow">POST-AUCTION TEAM SETUP</div><h1>Choose formation & assemble your team</h1><p>Drag every player into position. Primary and secondary roles receive the best rating.</p></div><FormationClock endsAt={state.formationEndsAt} /></header>
     <div className="formation-layout"><aside className="panel formation-list"><div className="panel-title"><h2>Formations</h2><span>{validFormations.length} OPTIONS</span></div><div className="formation-options">{validFormations.map(item => <button className={formationId === item.id ? "active" : ""} onClick={() => chooseFormation(item.id)} key={item.id}><b>{item.name}</b><span>{item.style}</span></button>)}</div></aside>
       <section className="lineup-center"><div className="lineup-toolbar"><div><span>SELECTED SYSTEM</span><strong>{formation.name}</strong><em>{formation.style}</em></div><button onClick={() => setPicks(autoArrange(me.squad, formation))}>AUTO ARRANGE</button></div><div className="tactical-pitch">{formation.slots.map(formationSlot => {
         const player = playerMap.get(picks[formationSlot.id] ?? "");
@@ -1101,6 +1319,7 @@ function FormationRoom({ socket, state, managerId, setError, leave }: { socket: 
 
 function RoomChat({ socket, state, managerId, setError }: { socket: GameSocket; state: RoomState; managerId: string; setError: (value: string) => void }) {
   const [open, setOpen] = useState(false);
+  const closeChat = useBackClosable(open, () => setOpen(false), "room-chat");
   const [draft, setDraft] = useState("");
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [typingNames, setTypingNames] = useState<string[]>([]);
@@ -1178,7 +1397,7 @@ function RoomChat({ socket, state, managerId, setError }: { socket: GameSocket; 
 
   return <div className={`room-chat phase-${state.phase} ${open ? "open" : ""}`}>
     {open && <section className="chat-window" aria-label="Room chat">
-      <header><div><span>ROOM CHAT</span><strong>Auction Eleven</strong></div><div className="chat-online"><i />{state.managers.filter(manager => manager.connected).length} online</div><button aria-label="Close chat" onClick={() => { setOpen(false); setEmojiOpen(false); }}>×</button></header>
+      <header><div><span>ROOM CHAT</span><strong>Auction Eleven</strong></div><div className="chat-online"><i />{state.managers.filter(manager => manager.connected).length} online</div><button aria-label="Close chat" onClick={() => { setEmojiOpen(false); closeChat(); }}>×</button></header>
       <div className="chat-messages" aria-live="polite">{messages.length === 0 ? <div className="chat-empty"><span>💬</span><b>Start the room conversation</b><p>Use the full keyboard, press Enter to send, or add an emoji.</p></div> : messages.map(message => {
         const own = message.managerId === managerId;
         return <div className={`chat-row ${own ? "own" : ""}`} key={message.id}>{!own && <span className="chat-avatar">{message.avatar}</span>}<div className="chat-bubble">{!own && <b>{message.managerName}</b>}<p>{message.text}</p><small>{new Date(message.sentAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{own ? " ✓" : ""}</small></div></div>;
@@ -1188,7 +1407,7 @@ function RoomChat({ socket, state, managerId, setError }: { socket: GameSocket; 
       <footer><button className={`emoji-toggle ${emojiOpen ? "active" : ""}`} aria-label="Toggle emoji picker" onClick={() => setEmojiOpen(value => !value)}>☺</button><textarea ref={textareaRef} rows={1} maxLength={300} value={draft} onChange={event => notifyTyping(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); } else if (event.key === "Escape") { setEmojiOpen(false); } }} placeholder="Type a message" aria-label="Chat message" /><button className="chat-send" aria-label="Send message" disabled={!draft.trim()} onClick={send}>➤</button></footer>
       <div className="chat-hint"><span>Enter to send</span><span>Shift + Enter for a new line</span><b>{draft.length}/300</b></div>
     </section>}
-    <button className="chat-launcher" aria-label={open ? "Close room chat" : "Open room chat"} onClick={() => setOpen(value => !value)}><span>{open ? "×" : "💬"}</span>{!open && unread > 0 && <b>{Math.min(unread, 99)}</b>}</button>
+    <button className="chat-launcher" aria-label={open ? "Close room chat" : "Open room chat"} onClick={() => open ? closeChat() : setOpen(true)}><span>{open ? "×" : "💬"}</span>{!open && unread > 0 && <b>{Math.min(unread, 99)}</b>}</button>
   </div>;
 }
 
@@ -1224,4 +1443,4 @@ function SquadRow({ entry }: { entry: SquadEntry }) { return <p><FootballerPhoto
 
 
 
-createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);
+createRoot(document.getElementById("root")!).render(<React.StrictMode><AppErrorBoundary><App /></AppErrorBoundary></React.StrictMode>);

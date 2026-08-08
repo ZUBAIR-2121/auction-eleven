@@ -2212,3 +2212,97 @@ body {
   .secondary,
   .kickoff { transition: none !important; }
 }
+
+/* ===== v1.5 stability + low-end performance controls ===== */
+.topbar-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.performance-switch {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(140,255,84,.14);
+  border-radius: 999px;
+  color: #dffbd8;
+  background: rgba(19,216,111,.055);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  white-space: nowrap;
+}
+.performance-switch:hover { border-color: rgba(140,255,84,.32); background: rgba(19,216,111,.09); }
+
+.recovery-screen {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 96px 18px 32px;
+}
+.recovery-card {
+  width: min(620px, 100%);
+  padding: clamp(22px, 4vw, 42px);
+}
+.recovery-card h1 { margin: 12px 0; font-size: clamp(28px, 5vw, 48px); line-height: 1; }
+.recovery-card p { color: rgba(226,239,224,.68); line-height: 1.65; }
+.recovery-card > div:last-child { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+
+.substitute-buttons { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.substitute-buttons button { min-width: 0; }
+
+.hero-video-fallback {
+  background:
+    radial-gradient(circle at 72% 28%, rgba(140,255,84,.13), transparent 28%),
+    linear-gradient(145deg, #07120c 0%, #050907 58%, #08130d 100%);
+}
+
+/* Performance mode changes visuals only. Gameplay, socket updates and timers remain unchanged. */
+html[data-ae-performance="performance"] .noise { display: none; }
+html[data-ae-performance="performance"] .ambient-grid { opacity: .14; }
+html[data-ae-performance="performance"] .hero-green-grid,
+html[data-ae-performance="performance"] .player-hero-pattern { opacity: .12; }
+html[data-ae-performance="performance"] .topbar,
+html[data-ae-performance="performance"] .toast,
+html[data-ae-performance="performance"] .reaction-pop,
+html[data-ae-performance="performance"] .player-hero-copy,
+html[data-ae-performance="performance"] .chat-window,
+html[data-ae-performance="performance"] .modal-backdrop {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+html[data-ae-performance="performance"] .panel,
+html[data-ae-performance="performance"] .player-card,
+html[data-ae-performance="performance"] .player-hero-slider,
+html[data-ae-performance="performance"] .entry-card,
+html[data-ae-performance="performance"] .bento-card,
+html[data-ae-performance="performance"] .topbar {
+  box-shadow: 0 8px 24px rgba(0,0,0,.24) !important;
+}
+html[data-ae-performance="performance"] .hero-video:not(.hero-video-fallback) { display: none; }
+html[data-ae-performance="performance"] .player-hero-image { filter: saturate(.9) contrast(1.02); }
+html[data-ae-performance="performance"] .result-burst,
+html[data-ae-performance="performance"] .loading-bar i { animation-duration: .25s !important; }
+
+@media (max-width: 760px) {
+  .topbar-tools { gap: 4px; }
+  .performance-switch { min-height: 32px; padding: 0 8px; font-size: 7px; }
+  .substitute-buttons { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 420px) {
+  .performance-switch { max-width: 76px; overflow: hidden; text-overflow: ellipsis; }
+  .substitute-buttons { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
+html[data-ae-performance="performance"] * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}

@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
-import { getMaximumSquadSize, getOpeningBid, getSquadPositionTargets, getStartingLineupSize } from "@auction-eleven/shared";
+import { getConfiguredSquadSize, getMinimumFootballersRequired, getOpeningBid, getSquadPositionTargets, getStartingLineupSize } from "@auction-eleven/shared";
 import type {
   Award,
+  AuctionStatePatch,
   BidEntry,
   ChatMessage,
   Footballer,
@@ -43,15 +44,20 @@ interface InternalRoom extends Omit<RoomState, "managers" | "availableFootballer
   passedManagerIds: string[];
   passwordSalt: string | null;
   passwordHash: string | null;
+  playerStatus: Map<string, "QUEUED" | "ACTIVE" | "SOLD" | "SKIPPED" | "FINISHED">;
+  transitionRoundId: string | null;
+  reauctionQueue: Footballer[];
+  reauctionPhase: boolean;
+  disconnectTimers: Map<string, NodeJS.Timeout>;
 }
 
 const POSITIONS: Position[] = ["GK", "DEF", "MID", "FWD"];
 const nameSchema = z.string().trim().min(2).max(18).regex(/^[\p{L}\p{N} _-]+$/u, "Use letters, numbers, spaces, - or _ only.");
 const poolTargetsSchema = z.object({
-  GK: z.number().int().min(15).max(20),
-  DEF: z.number().int().min(15).max(20),
-  MID: z.number().int().min(15).max(20),
-  FWD: z.number().int().min(15).max(20)
+  GK: z.number().int().min(15).max(24),
+  DEF: z.number().int().min(15).max(24),
+  MID: z.number().int().min(15).max(24),
+  FWD: z.number().int().min(15).max(24)
 });
 const settingsSchema = z.object({
   startingBudget: z.number().int().min(300).max(3000).optional(),
@@ -60,13 +66,15 @@ const settingsSchema = z.object({
   pricingMode: z.enum(["normal", "ovr_scaled"]).optional(),
   auctionSeconds: z.number().int().min(10).max(30).optional(),
   squadSize: z.union([z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11), z.literal(12), z.literal(13), z.literal(14), z.literal(15), z.literal(16), z.literal(17)]).optional(),
+  substituteCount: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10)]).optional(),
+  reauctionUnsold: z.boolean().optional(),
   antiSnipeSeconds: z.number().int().min(0).max(8).optional(),
   formationSeconds: z.number().int().min(120).max(600).optional(),
   botDifficulty: z.enum(["Amateur", "Professional", "World Class", "Legendary"]).optional(),
   managerLimit: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8)]).optional(),
   poolTargets: poolTargetsSchema.optional()
 });
-const selectedIdsSchema = z.array(z.string().min(1)).max(80);
+const selectedIdsSchema = z.array(z.string().min(1)).max(96);
 const lineupSchema = z.array(z.object({ slotId: z.string().min(1), footballerId: z.string().min(1) })).min(6).max(11);
 const chatSchema = z.string().trim().min(1, "Write a message first.").max(300, "Messages can contain up to 300 characters.");
 const accessSchema = z.enum(["public", "password"]);
@@ -83,7 +91,8 @@ export class RoomManager {
   constructor(
     private emitState: (code: string, state: RoomState) => void,
     private emitReaction: (code: string, payload: { managerName: string; reaction: string; at: number }) => void,
-    private emitDirectoryChanged: () => void
+    private emitDirectoryChanged: () => void,
+    private emitAuctionPatch: (code: string, patch: AuctionStatePatch) => void = () => undefined
   ) {}
 
   private makePassword(password: string): { salt: string; hash: string } {
@@ -145,31 +154,62 @@ export class RoomManager {
     return manager.squad.some(entry => this.catalogueId(entry.footballer) === id);
   }
 
-  private buildAuctionPool(selected: Footballer[], requiredPlayers: number, managerCount: number): Footballer[] {
-    if (!selected.length) return [];
-    const pool: Footballer[] = [];
-    for (const position of POSITIONS) {
-      const candidates = selected.filter(player => player.position === position);
-      if (!candidates.length) continue;
-      const recommended = getSquadPositionTargets(Math.ceil(requiredPlayers / managerCount));
-      const target = managerCount * recommended[position] + Math.max(2, Math.ceil(managerCount / 3));
-      let created = 0;
-      let cycle = 0;
-      while (created < target) {
-        for (const player of shuffle(candidates)) {
-          if (created >= target) break;
-          pool.push(cycle === 0 ? player : {
-            ...player,
-            id: `${player.id}__mirror_${cycle}_${position}_${created}`,
-            catalogId: player.catalogId ?? player.id
-          });
-          created++;
-        }
-        cycle++;
+  private buildAuctionPool(selected: Footballer[]): Footballer[] {
+    // One catalogue footballer may appear only once in a match. This removes the
+    // mirror/requeue behaviour that made skipped and sold players look repeated.
+    const uniqueByCatalogue = new Map<string, Footballer>();
+    for (const player of selected) uniqueByCatalogue.set(this.catalogueId(player), player);
+    return shuffle([...uniqueByCatalogue.values()]);
+  }
+
+  private configuredSquadSize(room: InternalRoom): number {
+    return getConfiguredSquadSize(room.settings.squadSize, room.settings.substituteCount);
+  }
+
+  private safeTimer(room: InternalRoom, label: string, callback: () => void, delay: number): NodeJS.Timeout {
+    return setTimeout(() => {
+      try { callback(); }
+      catch (error) {
+        console.error(JSON.stringify({
+          level: "error",
+          event: label,
+          roomId: room.code,
+          auctionRoundId: room.roundId,
+          phase: room.phase,
+          message: error instanceof Error ? error.message : "Unknown timer error"
+        }));
       }
-    }
-    if (pool.length < requiredPlayers) throw new Error("The selected player pool cannot create enough auction cards.");
-    return shuffle(pool);
+    }, Math.max(0, delay));
+  }
+
+  private clearDisconnectTimer(room: InternalRoom, managerId: string): void {
+    const timer = room.disconnectTimers.get(managerId);
+    if (timer) clearTimeout(timer);
+    room.disconnectTimers.delete(managerId);
+  }
+
+  private scheduleLobbyDisconnectCleanup(room: InternalRoom, managerId: string): void {
+    this.clearDisconnectTimer(room, managerId);
+    const timer = this.safeTimer(room, "lobby_disconnect_grace_expired", () => {
+      const latest = this.rooms.get(room.code);
+      if (!latest || latest.phase !== "lobby") return;
+      const manager = latest.managers.find(item => item.id === managerId);
+      if (!manager || manager.connected) return;
+      latest.managers = latest.managers.filter(item => item.id !== managerId);
+      latest.lastChatAt.delete(managerId);
+      latest.lastBidAt.delete(managerId);
+      latest.disconnectTimers.delete(managerId);
+      if (latest.managers.length === 0) {
+        this.clearTimers(latest);
+        this.rooms.delete(latest.code);
+        this.emitDirectoryChanged();
+        return;
+      }
+      this.migrateHostIfNeeded(latest);
+      this.broadcast(latest);
+      this.emitDirectoryChanged();
+    }, 30_000);
+    room.disconnectTimers.set(managerId, timer);
   }
 
   private syncSoloBots(room: InternalRoom): void {
@@ -228,6 +268,32 @@ export class RoomManager {
     this.emitState(room.code, this.publicState(room));
   }
 
+  /** Small high-frequency patch used for bids/passes so the full room snapshot is not rebroadcast. */
+  private broadcastAuctionPatch(room: InternalRoom): void {
+    room.version++;
+    this.emitAuctionPatch(room.code, {
+      code: room.code,
+      version: room.version,
+      roundId: room.roundId,
+      currentBid: room.currentBid,
+      highestBidderId: room.highestBidderId,
+      endsAt: room.endsAt,
+      bidHistory: room.bidHistory,
+      passedManagerIds: room.passedManagerIds
+    });
+  }
+
+  private migrateHostIfNeeded(room: InternalRoom): void {
+    const currentHost = room.managers.find(manager => manager.id === room.hostId);
+    if (currentHost?.connected) return;
+    const next = room.managers.find(manager => manager.connected && !manager.isBot)
+      ?? room.managers.find(manager => manager.connected)
+      ?? room.managers[0];
+    if (!next) return;
+    room.hostId = next.id;
+    room.managers.forEach(manager => { manager.isHost = manager.id === next.id; });
+  }
+
   create(nameInput: string, sessionId: string, socketId: string, solo = false, accessInput: RoomAccess = "public", passwordInput?: string): { code: string; managerId: string } {
     const name = nameSchema.parse(nameInput);
     const code = this.code();
@@ -275,7 +341,12 @@ export class RoomManager {
       lastBidAt: new Map(),
       passedManagerIds: [],
       passwordSalt: password?.salt ?? null,
-      passwordHash: password?.hash ?? null
+      passwordHash: password?.hash ?? null,
+      playerStatus: new Map(),
+      transitionRoundId: null,
+      reauctionQueue: [],
+      reauctionPhase: false,
+      disconnectTimers: new Map()
     };
     this.rooms.set(code, room);
     this.broadcast(room);
@@ -309,6 +380,19 @@ export class RoomManager {
     const code = codeInput.trim().toUpperCase();
     const room = this.get(code);
     if (room.isSolo) throw new Error("Solo Practice rooms cannot be joined.");
+
+    // A browser that already owns a seat should reconnect to that seat instead
+    // of consuming another room slot or creating a duplicate manager.
+    const existing = room.managers.find(manager => !manager.isBot && manager.sessionId === sessionId);
+    if (existing) {
+      this.clearDisconnectTimer(room, existing.id);
+      existing.socketId = socketId;
+      existing.connected = true;
+      this.broadcast(room);
+      this.emitDirectoryChanged();
+      return { code, managerId: existing.id };
+    }
+
     if (room.phase !== "lobby") throw new Error("This match has already started.");
     if (room.managers.length >= room.settings.managerLimit) throw new Error(`Room full: ${room.managers.length}/${room.settings.managerLimit} managers have already joined.`);
     if (!this.passwordMatches(room, passwordInput)) throw new Error("Incorrect room password.");
@@ -338,6 +422,7 @@ export class RoomManager {
         openSlots: Math.max(0, room.settings.managerLimit - room.managers.length),
         pricingMode: room.settings.pricingMode,
         squadSize: room.settings.squadSize,
+        substituteCount: room.settings.substituteCount,
         auctionSeconds: room.settings.auctionSeconds,
         createdAt: room.createdAt
       }))
@@ -373,18 +458,23 @@ export class RoomManager {
     const room = this.get(codeInput.trim().toUpperCase());
     const manager = room.managers.find(item => item.sessionId === sessionId);
     if (!manager) throw new Error("Your saved seat could not be found.");
+    this.clearDisconnectTimer(room, manager.id);
     manager.socketId = socketId;
     manager.connected = true;
     this.broadcast(room);
+    this.emitDirectoryChanged();
     return { managerId: manager.id };
   }
 
   leave(code: string, managerId: string): void {
     const room = this.get(code);
     const manager = this.managerIn(room, managerId);
+    this.clearDisconnectTimer(room, manager.id);
 
     if (room.isSolo) {
       this.clearTimers(room);
+      room.disconnectTimers.forEach(clearTimeout);
+      room.disconnectTimers.clear();
       this.rooms.delete(room.code);
       return;
     }
@@ -395,6 +485,8 @@ export class RoomManager {
       room.lastBidAt.delete(manager.id);
       if (room.managers.length === 0) {
         this.clearTimers(room);
+        room.disconnectTimers.forEach(clearTimeout);
+        room.disconnectTimers.clear();
         this.rooms.delete(room.code);
         this.emitDirectoryChanged();
         return;
@@ -410,7 +502,9 @@ export class RoomManager {
 
     manager.connected = false;
     manager.socketId = null;
+    this.migrateHostIfNeeded(room);
     this.broadcast(room);
+    this.emitDirectoryChanged();
   }
 
   disconnect(socketId: string): void {
@@ -419,7 +513,18 @@ export class RoomManager {
       if (!manager) continue;
       manager.connected = false;
       manager.socketId = null;
+      this.migrateHostIfNeeded(room);
+      if (room.phase === "lobby" && !room.isSolo) this.scheduleLobbyDisconnectCleanup(room, manager.id);
       this.broadcast(room);
+      this.emitDirectoryChanged();
+    }
+  }
+
+  assertSocketOwner(code: string, managerId: string, socketId: string): void {
+    const room = this.get(code);
+    const manager = this.managerIn(room, managerId);
+    if (!manager.isBot && manager.socketId !== socketId) {
+      throw new Error("This manager seat is active in another tab or device. Reconnect here to take control.");
     }
   }
 
@@ -429,6 +534,7 @@ export class RoomManager {
     const target = this.managerIn(room, targetManagerId);
     if (target.connected) throw new Error("That manager is still connected.");
     if (target.isHost) throw new Error("The host seat cannot be replaced by AI.");
+    this.clearDisconnectTimer(room, target.id);
     target.isBot = true;
     target.connected = true;
     target.socketId = null;
@@ -491,14 +597,33 @@ export class RoomManager {
       const counts = this.selectionCounts(room.selectedFootballerIds);
       throw new Error(`Complete the player pool: GK ${counts.GK}/${room.settings.poolTargets.GK}, DEF ${counts.DEF}/${room.settings.poolTargets.DEF}, MID ${counts.MID}/${room.settings.poolTargets.MID}, FWD ${counts.FWD}/${room.settings.poolTargets.FWD}.`);
     }
-    const requiredPlayers = room.managers.length * getMaximumSquadSize(room.settings.squadSize);
+    const requiredPlayers = getMinimumFootballersRequired(room.managers.length, room.settings.squadSize, room.settings.substituteCount);
     const selected = room.selectedFootballerIds.map(id => FOOTBALLER_BY_ID.get(id)).filter((player): player is Footballer => !!player);
+    const selectedUnique = new Map(selected.map(player => [this.catalogueId(player), player]));
+    const availablePlayers = selectedUnique.size;
+    if (availablePlayers < requiredPlayers) {
+      throw new Error(`This configuration requires ${requiredPlayers} footballers for ${room.managers.length} managers with ${getStartingLineupSize(room.settings.squadSize)} starters and ${room.settings.substituteCount} substitutes each, but only ${availablePlayers} eligible footballers are selected. Reduce substitutes or increase the footballer pool.`);
+    }
+    const counts = this.selectionCounts([...selectedUnique.values()].map(player => player.id));
+    const starterCount = getStartingLineupSize(room.settings.squadSize);
+    if (counts.GK < room.managers.length) {
+      throw new Error(`This configuration needs at least ${room.managers.length} goalkeepers so every manager can field one, but only ${counts.GK} are selected.`);
+    }
+    const requiredOutfield = room.managers.length * Math.max(0, starterCount - 1);
+    const availableOutfield = counts.DEF + counts.MID + counts.FWD;
+    if (availableOutfield < requiredOutfield) {
+      throw new Error(`This configuration needs at least ${requiredOutfield} outfield footballers for the starting lineups, but only ${availableOutfield} are selected.`);
+    }
     room.phase = "auction";
     this.emitDirectoryChanged();
-    room.footballerPool = this.buildAuctionPool(selected, requiredPlayers, room.managers.length);
+    room.footballerPool = this.buildAuctionPool([...selectedUnique.values()]);
     room.totalRounds = room.footballerPool.length;
     room.roundIndex = 0;
     room.unsoldCounts.clear();
+    room.playerStatus = new Map(room.footballerPool.map(player => [player.id, "QUEUED" as const]));
+    room.transitionRoundId = null;
+    room.reauctionQueue = [];
+    room.reauctionPhase = false;
     room.rankings = [];
     room.awards = [];
     room.formationEndsAt = null;
@@ -517,17 +642,48 @@ export class RoomManager {
 
   private beginRound(room: InternalRoom): void {
     this.clearTimers(room);
-    const maximumSquadSize = getMaximumSquadSize(room.settings.squadSize);
-    const noManagerCanBuyMore = room.managers.every(manager => manager.squad.length >= maximumSquadSize || manager.budget < room.settings.minimumBid);
+    room.transitionRoundId = null;
+    const maximumSquadSize = this.configuredSquadSize(room);
+    const openingFloor = room.settings.minimumBid;
+    const noManagerCanBuyMore = room.managers.every(manager =>
+      manager.auctionComplete || manager.squad.length >= maximumSquadSize || manager.budget < openingFloor
+    );
     if (noManagerCanBuyMore) {
       this.beginFormation(room);
       return;
     }
-    if (room.roundIndex >= room.footballerPool.length) {
-      throw new Error("The selected pool ended before every squad was complete. Add more room footballers.");
+
+    while (room.roundIndex < room.footballerPool.length) {
+      const candidate = room.footballerPool[room.roundIndex]!;
+      const status = room.playerStatus.get(candidate.id);
+      if (status === "SOLD" || status === "SKIPPED" || status === "FINISHED") room.roundIndex++;
+      else break;
     }
+
+    if (room.roundIndex >= room.footballerPool.length) {
+      if (room.settings.reauctionUnsold && !room.reauctionPhase && room.reauctionQueue.length > 0) {
+        room.reauctionPhase = true;
+        room.footballerPool = shuffle([...new Map(room.reauctionQueue.map(player => [player.id, player])).values()]);
+        room.roundIndex = 0;
+        room.reauctionQueue = [];
+        for (const player of room.footballerPool) room.playerStatus.set(player.id, "QUEUED");
+      } else {
+        // Never throw from an asynchronous timer. If the configured reserve was
+        // exhausted, move forward safely with the squads that were actually won.
+        this.beginFormation(room);
+        return;
+      }
+    }
+
+    const footballer = room.footballerPool[room.roundIndex];
+    if (!footballer) {
+      this.beginFormation(room);
+      return;
+    }
+
     room.phase = "auction";
-    room.currentFootballer = room.footballerPool[room.roundIndex]!;
+    room.currentFootballer = footballer;
+    room.playerStatus.set(footballer.id, "ACTIVE");
     room.currentBid = 0;
     room.highestBidderId = null;
     room.bidHistory = [];
@@ -543,14 +699,17 @@ export class RoomManager {
 
   private scheduleEnd(room: InternalRoom): void {
     if (room.timer) clearTimeout(room.timer);
+    const roundId = room.roundId;
     const delay = Math.max(0, (room.endsAt ?? Date.now()) - Date.now());
-    room.timer = setTimeout(() => this.endRound(room.code, room.roundId), delay);
+    room.timer = this.safeTimer(room, "auction_timer_complete", () => this.endRound(room.code, roundId), delay);
   }
 
   private scheduleBots(room: InternalRoom): void {
     room.botTimers.forEach(clearTimeout);
     room.botTimers = [];
-    const footballer = room.currentFootballer!;
+    const footballer = room.currentFootballer;
+    if (!footballer || room.phase !== "auction") return;
+    const roundId = room.roundId;
     const openingBid = getOpeningBid(room.settings, footballer);
     const profiles = {
       Amateur: { value: .72, variance: .24, attempts: [1, 2], reaction: 3400, need: .10 },
@@ -559,20 +718,20 @@ export class RoomManager {
       Legendary: { value: 1.24, variance: .16, attempts: [4, 7], reaction: 850, need: .52 }
     } as const;
     const profile = profiles[room.settings.botDifficulty];
-    room.managers.filter(manager => manager.isBot && manager.squad.length < getMaximumSquadSize(room.settings.squadSize) && manager.budget >= openingBid).forEach((bot, index) => {
-      const reserve = Math.max(0, room.settings.squadSize - bot.squad.length - 1) * room.settings.minimumBid;
-      const targets = getSquadPositionTargets(room.settings.squadSize);
+    room.managers.filter(manager => manager.isBot && manager.squad.length < this.configuredSquadSize(room) && manager.budget >= openingBid).forEach((bot, index) => {
+      const reserve = Math.max(0, this.configuredSquadSize(room) - bot.squad.length - 1) * room.settings.minimumBid;
+      const targets = getSquadPositionTargets(getStartingLineupSize(room.settings.squadSize));
       const ownedAtPosition = bot.squad.filter(entry => entry.footballer.position === footballer.position).length;
       const positionalNeed = Math.max(0, targets[footballer.position] - ownedAtPosition) / Math.max(1, targets[footballer.position]);
       const qualityBoost = Math.max(0, footballer.overall - 82) * .012;
       const personalityIndex = room.managers.filter(item => item.isBot).findIndex(item => item.id === bot.id) % 6;
       const personality = [
-        { value: -.18, need: .08, late: .10 },  // Bargain Hunter
-        { value: .24, need: .08, late: .18 },   // Aggressive Bidder
-        { value: footballer.overall >= 88 ? .34 : -.10, need: 0, late: .24 }, // Star Collector
-        { value: 0, need: .12, late: .28 },      // Balanced Manager
-        { value: -.03, need: .38, late: .32 },   // Tactical Specialist
-        { value: .06, need: .12, late: .88 }     // Last-Second Sniper
+        { value: -.18, need: .08, late: .10 },
+        { value: .24, need: .08, late: .18 },
+        { value: footballer.overall >= 88 ? .34 : -.10, need: 0, late: .24 },
+        { value: 0, need: .12, late: .28 },
+        { value: -.03, need: .38, late: .32 },
+        { value: .06, need: .12, late: .88 }
       ][personalityIndex]!;
       const multiplier = profile.value + personality.value + positionalNeed * (profile.need + personality.need) + qualityBoost + (Math.random() - .5) * profile.variance;
       const max = Math.max(0, Math.min(bot.budget - reserve, Math.round(footballer.basePrice * multiplier)));
@@ -584,11 +743,11 @@ export class RoomManager {
         const delay = strategicLateBias && randomPoint < strategicLateBias
           ? Math.max(profile.reaction, roundWindow * (.70 + Math.random() * .24))
           : profile.reaction + Math.floor(Math.random() * Math.max(1200, roundWindow - profile.reaction));
-        const timer = setTimeout(() => {
-          if (room.phase !== "auction" || room.currentFootballer?.id !== footballer.id || room.highestBidderId === bot.id) return;
+        const timer = this.safeTimer(room, "bot_bid", () => {
+          if (room.phase !== "auction" || room.roundId !== roundId || room.currentFootballer?.id !== footballer.id || room.highestBidderId === bot.id) return;
           const next = room.currentBid === 0 ? openingBid : room.currentBid + room.settings.bidIncrement;
           if (next <= max) {
-            try { this.bid(room.code, bot.id, next, this.id("botbid"), room.roundId); } catch { /* another bid won the race */ }
+            try { this.bid(room.code, bot.id, next, this.id("botbid"), roundId); } catch { /* another action won the race */ }
           }
         }, delay + index * 80 + attempt * 110);
         room.botTimers.push(timer);
@@ -599,6 +758,7 @@ export class RoomManager {
   bid(code: string, managerId: string, amount: number, requestId: string, roundId: string): void {
     const room = this.get(code);
     const manager = this.managerIn(room, managerId);
+    if (room.transitionRoundId) throw new Error("This auction round has already ended. Waiting for the next footballer.");
     if (roundId !== room.roundId) throw new Error("That bid belongs to an older auction round.");
     if (!requestId || requestId.length > 100) throw new Error("Invalid bid request.");
     if (room.seenRequestIds.has(requestId)) return;
@@ -622,48 +782,48 @@ export class RoomManager {
     room.highestBidderId = manager.id;
     const entry: BidEntry = { id: this.id("bid"), managerId: manager.id, managerName: manager.name, amount, receivedAt: Date.now() };
     room.bidHistory = [entry, ...room.bidHistory].slice(0, 12);
-    if (room.endsAt) {
-      const remaining = room.endsAt - Date.now();
-      if (remaining <= 5000) {
-        room.endsAt = Date.now() + 5000;
-        this.scheduleEnd(room);
-      }
+    if (room.endsAt && room.endsAt - Date.now() <= room.settings.antiSnipeSeconds * 1000) {
+      room.endsAt = Date.now() + room.settings.antiSnipeSeconds * 1000;
+      this.scheduleEnd(room);
     }
-    this.broadcast(room);
+    this.broadcastAuctionPatch(room);
   }
 
   pass(code: string, managerId: string, roundId: string): void {
     const room = this.get(code);
     const manager = this.managerIn(room, managerId);
+    if (room.transitionRoundId) return;
     if (room.phase !== "auction" || !room.endsAt || Date.now() >= room.endsAt) throw new Error("This auction round is closed.");
     if (roundId !== room.roundId) throw new Error("That pass belongs to an older auction round.");
     if (room.passedManagerIds.includes(manager.id)) return;
 
     room.passedManagerIds = [...room.passedManagerIds, manager.id];
-    this.broadcast(room);
 
-    const maximumSquadSize = getMaximumSquadSize(room.settings.squadSize);
+    const maximumSquadSize = this.configuredSquadSize(room);
     const openingBid = getOpeningBid(room.settings, room.currentFootballer);
     const eligible = room.managers.filter(item =>
-      !item.auctionComplete &&
-      item.squad.length < maximumSquadSize &&
-      item.budget >= openingBid &&
-      !!room.currentFootballer &&
-      !this.managerOwns(item, room.currentFootballer)
+      !item.auctionComplete && item.squad.length < maximumSquadSize && item.budget >= openingBid &&
+      !!room.currentFootballer && !this.managerOwns(item, room.currentFootballer)
     );
     const challengers = eligible.filter(item => item.id !== room.highestBidderId);
     if (room.highestBidderId) {
-      if (challengers.every(item => room.passedManagerIds.includes(item.id))) this.endRound(room.code, room.roundId);
-    } else if (eligible.length > 0 && eligible.every(item => room.passedManagerIds.includes(item.id))) {
+      if (challengers.every(item => room.passedManagerIds.includes(item.id))) {
+        this.endRound(room.code, room.roundId);
+        return;
+      }
+    } else if (eligible.length === 0 || eligible.every(item => room.passedManagerIds.includes(item.id))) {
       this.endRound(room.code, room.roundId);
+      return;
     }
+    this.broadcastAuctionPatch(room);
   }
 
   completeAuction(code: string, managerId: string): void {
     const room = this.get(code);
     if (room.phase !== "auction" && room.phase !== "round_result") throw new Error("You can only complete your squad during the auction.");
     const manager = this.managerIn(room, managerId);
-    if (manager.squad.length < room.settings.squadSize) throw new Error(`Sign at least ${room.settings.squadSize} players before completing your squad.`);
+    const configuredSquadSize = this.configuredSquadSize(room);
+    if (manager.squad.length < configuredSquadSize) throw new Error(`Sign exactly ${configuredSquadSize} players (${getStartingLineupSize(room.settings.squadSize)} starters + ${room.settings.substituteCount} substitutes) before completing your squad.`);
     const starterCount = getStartingLineupSize(room.settings.squadSize);
     const goalkeeperCount = manager.squad.filter(entry => entry.footballer.position === "GK").length;
     const outfieldCount = manager.squad.length - goalkeeperCount;
@@ -672,57 +832,50 @@ export class RoomManager {
     manager.auctionComplete = true;
     if (!room.passedManagerIds.includes(manager.id)) room.passedManagerIds = [...room.passedManagerIds, manager.id];
     this.broadcast(room);
-    if (room.managers.every(item => item.auctionComplete || item.squad.length >= getMaximumSquadSize(room.settings.squadSize))) {
+    if (room.managers.every(item => item.auctionComplete || item.squad.length >= configuredSquadSize)) {
       this.beginFormation(room);
       return;
     }
     if (room.phase === "auction") {
       const openingBid = getOpeningBid(room.settings, room.currentFootballer);
-      const activeChallengers = room.managers.filter(item => !item.auctionComplete && item.id !== room.highestBidderId && item.squad.length < getMaximumSquadSize(room.settings.squadSize) && item.budget >= openingBid);
+      const activeChallengers = room.managers.filter(item => !item.auctionComplete && item.id !== room.highestBidderId && item.squad.length < configuredSquadSize && item.budget >= openingBid);
       if (room.highestBidderId && activeChallengers.every(item => room.passedManagerIds.includes(item.id))) this.endRound(room.code, room.roundId);
     }
   }
 
   private endRound(code: string, roundId: string): void {
-    const room = this.rooms.get(code);
+    const room = this.rooms.get(code.trim().toUpperCase());
     if (!room || room.roundId !== roundId || room.phase !== "auction") return;
+    if (room.transitionRoundId === roundId) return;
+    room.transitionRoundId = roundId;
     this.clearTimers(room);
     room.endsAt = null;
     const footballer = room.currentFootballer;
 
     if (room.highestBidderId && footballer) {
       const winner = this.managerIn(room, room.highestBidderId);
-      winner.budget -= room.currentBid;
-      winner.squad.push({ footballer, price: room.currentBid, round: room.roundIndex + 1 });
-      room.lastWinner = { managerName: winner.name, footballerName: footballer.name, amount: room.currentBid };
-    } else if (footballer) {
-      const openingBid = getOpeningBid(room.settings, footballer);
-      const attempts = (room.unsoldCounts.get(footballer.id) ?? 0) + 1;
-      room.unsoldCounts.set(footballer.id, attempts);
-      if (attempts >= 2) {
-        const eligible = room.managers
-          .filter(manager => !manager.auctionComplete && manager.squad.length < getMaximumSquadSize(room.settings.squadSize) && manager.budget >= openingBid && !!footballer && !this.managerOwns(manager, footballer) && !room.passedManagerIds.includes(manager.id))
-          .sort((a, b) => a.squad.length - b.squad.length || b.budget - a.budget || a.joinedAt - b.joinedAt);
-        const recipient = eligible[0];
-        if (recipient) {
-          recipient.budget -= openingBid;
-          recipient.squad.push({ footballer, price: openingBid, round: room.roundIndex + 1 });
-          room.lastWinner = { managerName: recipient.name, footballerName: footballer.name, amount: openingBid, automatic: true };
-        } else {
-          room.lastWinner = null;
-        }
+      if (winner.squad.length < this.configuredSquadSize(room) && !this.managerOwns(winner, footballer)) {
+        winner.budget -= room.currentBid;
+        winner.squad.push({ footballer, price: room.currentBid, round: room.roundIndex + 1 });
+        room.playerStatus.set(footballer.id, "SOLD");
+        room.lastWinner = { managerName: winner.name, footballerName: footballer.name, amount: room.currentBid };
       } else {
-        room.footballerPool.push(footballer);
-        room.totalRounds = room.footballerPool.length;
+        room.playerStatus.set(footballer.id, "FINISHED");
         room.lastWinner = null;
       }
+    } else if (footballer) {
+      room.playerStatus.set(footballer.id, "SKIPPED");
+      room.lastWinner = null;
+      if (room.settings.reauctionUnsold && !room.reauctionPhase) room.reauctionQueue.push(footballer);
     }
 
     room.phase = "round_result";
     this.broadcast(room);
-    room.timer = setTimeout(() => {
-      room.roundIndex++;
-      this.beginRound(room);
+    room.timer = this.safeTimer(room, "round_result_complete", () => {
+      const latest = this.rooms.get(room.code);
+      if (!latest || latest.roundId !== roundId || latest.phase !== "round_result") return;
+      latest.roundIndex++;
+      this.beginRound(latest);
     }, 2000);
   }
 
@@ -742,7 +895,7 @@ export class RoomManager {
       manager.formationId = automatic.formationId;
       manager.lineup = automatic.lineup;
       manager.lineupScore = automatic.score;
-      manager.lineupSubmitted = manager.isBot;
+      manager.lineupSubmitted = manager.isBot || manager.squad.length < getStartingLineupSize(room.settings.squadSize);
     }
 
     this.broadcast(room);
@@ -750,7 +903,7 @@ export class RoomManager {
       this.finish(room);
       return;
     }
-    room.timer = setTimeout(() => {
+    room.timer = this.safeTimer(room, "formation_timer_complete", () => {
       const latest = this.rooms.get(room.code);
       if (!latest || latest.phase !== "formation") return;
       latest.managers.forEach(manager => { manager.lineupSubmitted = true; });
@@ -804,6 +957,8 @@ export class RoomManager {
     const manager = this.managerIn(room, managerId);
     if (manager.isBot) throw new Error("AI managers cannot quit the match.");
     this.clearTimers(room);
+    room.disconnectTimers.forEach(clearTimeout);
+    room.disconnectTimers.clear();
     this.rooms.delete(room.code);
   }
 

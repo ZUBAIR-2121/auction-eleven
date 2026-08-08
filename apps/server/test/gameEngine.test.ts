@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FORMATIONS, getOpeningBid, type ManagerView, type SquadEntry } from "@auction-eleven/shared";
+import { FORMATIONS, getConfiguredSquadSize, getMinimumFootballersRequired, getOpeningBid, type ManagerView, type SquadEntry } from "@auction-eleven/shared";
 import { FOOTBALLERS } from "../src/footballers.js";
 import { buildAutomaticLineup, DEFAULT_SETTINGS, rankManagers, validateAndBuildLineup, validateBid } from "../src/gameEngine.js";
 
@@ -32,7 +32,14 @@ describe("game defaults", () => {
   it("uses a fast twelve-second auction timer", () => expect(DEFAULT_SETTINGS.auctionSeconds).toBe(12));
   it("builds an 11-player starting squad", () => expect(DEFAULT_SETTINGS.squadSize).toBe(11));
   it("defaults to a six-squad room capacity", () => expect(DEFAULT_SETTINGS.managerLimit).toBe(6));
-  it("starts with 68 real-player base cards that can be mirrored for large rooms", () => expect(Object.values(DEFAULT_SETTINGS.poolTargets).reduce((sum, value) => sum + value, 0)).toBe(68));
+  it("starts with a 96-player unique room pool target so the default six-manager room is viable", () => expect(Object.values(DEFAULT_SETTINGS.poolTargets).reduce((sum, value) => sum + value, 0)).toBe(96));
+  it("defaults to five substitutes", () => expect(DEFAULT_SETTINGS.substituteCount).toBe(5));
+  it("does not re-auction skipped players by default", () => expect(DEFAULT_SETTINGS.reauctionUnsold).toBe(false));
+  it("calculates manager capacity from starters plus substitutes", () => {
+    expect(getConfiguredSquadSize(11, 5)).toBe(16);
+    expect(getMinimumFootballersRequired(3, 11, 5)).toBe(48);
+    expect(getMinimumFootballersRequired(8, 6, 2)).toBe(64);
+  });
   it("keeps classic flat opening prices as the default", () => expect(DEFAULT_SETTINGS.pricingMode).toBe("normal"));
 });
 

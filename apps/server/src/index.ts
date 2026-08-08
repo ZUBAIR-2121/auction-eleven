@@ -34,33 +34,46 @@ const io=new Server<ClientToServerEvents,ServerToClientEvents>(server,{cors:{ori
 const rooms=new RoomManager(
   (code,state)=>io.to(code).emit("room:state",state),
   (code,payload)=>io.to(code).emit("room:reaction",payload),
-  ()=>io.emit("rooms:changed")
+  ()=>io.emit("rooms:changed"),
+  (code,patch)=>io.to(code).emit("room:auctionPatch",patch)
 );
 
-const safeAck=(ack:Function,fn:()=>unknown)=>{try{ack({ok:true,data:fn()})}catch(error){ack({ok:false,error:error instanceof Error?error.message:"Unexpected server error."})}};
+const safeAck=(ack:Function,fn:()=>unknown)=>{
+  try{ack({ok:true,data:fn()})}
+  catch(error){
+    const message=error instanceof Error?error.message:"Unexpected server error.";
+    console.warn(JSON.stringify({level:"warn",event:"socket_request_rejected",message}));
+    ack({ok:false,error:message});
+  }
+};
 
 io.on("connection",socket=>{
   let managerId:string|null=null;
   let roomCode:string|null=null;
+  const ensureSeat=(code:string)=>{
+    if(!managerId)throw new Error("Join a room first.");
+    rooms.assertSocketOwner(code,managerId,socket.id);
+    return managerId;
+  };
   socket.on("room:create",(payload,ack)=>safeAck(ack,()=>{const result=rooms.create(payload.name,payload.sessionId,socket.id,!!payload.solo,payload.access,payload.password);managerId=result.managerId;roomCode=result.code;socket.join(result.code);socket.emit("room:state",rooms.getState(result.code));return result;}));
   socket.on("room:join",(payload,ack)=>safeAck(ack,()=>{const result=rooms.join(payload.code,payload.name,payload.sessionId,socket.id,payload.password);managerId=result.managerId;roomCode=result.code;socket.join(result.code);socket.emit("room:state",rooms.getState(result.code));return result;}));
   socket.on("rooms:list",(payload,ack)=>safeAck(ack,()=>rooms.listRooms(payload.filters)));
   socket.on("room:resume",(payload,ack)=>safeAck(ack,()=>{const result=rooms.resume(payload.code,payload.sessionId,socket.id);managerId=result.managerId;roomCode=payload.code.toUpperCase();socket.join(roomCode);socket.emit("room:state",rooms.getState(roomCode));return result;}));
-  socket.on("room:leave",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.leave(payload.code,managerId);socket.leave(payload.code.toUpperCase());managerId=null;roomCode=null;return null;}));
-  socket.on("room:replaceWithAI",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.replaceWithAI(payload.code,managerId,payload.managerId);return null;}));
-  socket.on("room:ready",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.setReady(payload.code,managerId,payload.ready);return null;}));
-  socket.on("room:updateSettings",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.updateSettings(payload.code,managerId,payload.settings);return null;}));
-  socket.on("room:updateAccess",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.updateAccess(payload.code,managerId,payload.access,payload.password);return null;}));
-  socket.on("room:updatePlayerPool",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.updatePlayerPool(payload.code,managerId,payload.selectedFootballerIds);return null;}));
-  socket.on("game:start",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.start(payload.code,managerId);return null;}));
-  socket.on("game:quitSolo",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.quitSolo(payload.code,managerId);managerId=null;roomCode=null;return null;}));
-  socket.on("auction:bid",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.bid(payload.code,managerId,payload.amount,payload.requestId,payload.roundId);return null;}));
-  socket.on("auction:pass",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.pass(payload.code,managerId,payload.roundId);return null;}));
-  socket.on("auction:complete",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.completeAuction(payload.code,managerId);return null;}));
-  socket.on("lineup:submit",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.submitLineup(payload.code,managerId,payload.formationId,payload.picks);return null;}));
-  socket.on("room:reaction",payload=>{if(managerId)rooms.reaction(payload.code,managerId,payload.reaction);});
-  socket.on("chat:send",(payload,ack)=>safeAck(ack,()=>{if(!managerId)throw new Error("Join a room first.");rooms.sendChat(payload.code,managerId,payload.text);return null;}));
-  socket.on("chat:typing",payload=>{if(!managerId)return;try{const typing=rooms.typing(payload.code,managerId,payload.isTyping);socket.to(payload.code.toUpperCase()).emit("chat:typing",typing);}catch{/* ignore stale typing events */}});
+  socket.on("room:leave",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.leave(payload.code,seat);socket.leave(payload.code.toUpperCase());managerId=null;roomCode=null;return null;}));
+  socket.on("room:replaceWithAI",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.replaceWithAI(payload.code,seat,payload.managerId);return null;}));
+  socket.on("room:ready",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.setReady(payload.code,seat,payload.ready);return null;}));
+  socket.on("room:updateSettings",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.updateSettings(payload.code,seat,payload.settings);return null;}));
+  socket.on("room:updateAccess",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.updateAccess(payload.code,seat,payload.access,payload.password);return null;}));
+  socket.on("room:updatePlayerPool",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.updatePlayerPool(payload.code,seat,payload.selectedFootballerIds);return null;}));
+  socket.on("game:start",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.start(payload.code,seat);return null;}));
+  socket.on("game:quitSolo",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.quitSolo(payload.code,seat);managerId=null;roomCode=null;return null;}));
+  socket.on("auction:bid",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.bid(payload.code,seat,payload.amount,payload.requestId,payload.roundId);return null;}));
+  socket.on("auction:pass",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.pass(payload.code,seat,payload.roundId);return null;}));
+  socket.on("auction:complete",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.completeAuction(payload.code,seat);return null;}));
+  socket.on("lineup:submit",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.submitLineup(payload.code,seat,payload.formationId,payload.picks);return null;}));
+  socket.on("room:reaction",payload=>{try{const seat=ensureSeat(payload.code);rooms.reaction(payload.code,seat,payload.reaction);}catch{/* ignore stale/invalid reaction events */}});
+  socket.on("chat:send",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.sendChat(payload.code,seat,payload.text);return null;}));
+  socket.on("chat:typing",payload=>{try{const seat=ensureSeat(payload.code);const typing=rooms.typing(payload.code,seat,payload.isTyping);socket.to(payload.code.toUpperCase()).emit("chat:typing",typing);}catch{/* ignore stale typing events */}});
   socket.on("disconnect",()=>rooms.disconnect(socket.id));
 });
 

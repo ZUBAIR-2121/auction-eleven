@@ -5,16 +5,17 @@ import { DEFAULT_SETTINGS } from "../src/gameEngine.js";
 const positions = ["GK", "DEF", "MID", "FWD"] as const;
 
 describe("room footballer catalogue", () => {
-  it("contains 24 selectable real footballers in every position", () => {
+  it("contains a healthy selectable real-player catalogue in every broad position", () => {
     for (const position of positions) {
       const players = FOOTBALLERS.filter(player => player.position === position);
-      expect(players).toHaveLength(24);
+      expect(players.length).toBeGreaterThanOrEqual(24);
       expect(players.every(player => player.isRealPlayer)).toBe(true);
-      expect(new Set(players.map(player => player.id)).size).toBe(24);
+      expect(new Set(players.map(player => player.id)).size).toBe(players.length);
+      expect(new Set(players.map(player => player.canonicalId ?? player.catalogId ?? player.id)).size).toBe(players.length);
     }
   });
 
-  it("defaults to 17 selected players per position", () => {
-    expect(DEFAULT_SETTINGS.poolTargets).toEqual({ GK: 17, DEF: 17, MID: 17, FWD: 17 });
+  it("uses the expanded 24-player broad-position defaults", () => {
+    expect(DEFAULT_SETTINGS.poolTargets).toEqual({ GK: 24, DEF: 24, MID: 24, FWD: 24 });
   });
 });

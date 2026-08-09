@@ -1629,12 +1629,14 @@ function RoomChat({ socket, state, managerId, setError }: { socket: GameSocket; 
 }
 
 function Results({ state, managerId, leave }: { state: RoomState; managerId: string; leave: () => void }) {
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     releaseDocumentScrollLock();
-    const page = document.querySelector<HTMLElement>("[data-results-scroll]");
+    const page = scrollAreaRef.current;
     const frame = window.requestAnimationFrame(() => {
-      page?.scrollTo({ top: 0, left: 0, behavior: "auto" });
       window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      page?.scrollTo({ top: 0, left: 0, behavior: "auto" });
       page?.focus({ preventScroll: true });
     });
     return () => {
@@ -1647,13 +1649,19 @@ function Results({ state, managerId, leave }: { state: RoomState; managerId: str
   const starterCount = getStartingLineupSize(state.settings.squadSize);
   const podium = state.rankings.slice(0, 3);
   const podiumOrder = [podium[1], podium[0], podium[2]].filter((item): item is NonNullable<typeof item> => !!item);
-  return <main className="results page results-scroll-page" data-results-scroll tabIndex={-1}><section className="winner-hero"><div className="trophy">🏆</div><div><div className="eyebrow">FORMATION ANALYSIS COMPLETE</div><h1>{winner?.managerName} wins!</h1><p>{winner?.formationName} · Final team score <strong>{winner?.score}</strong></p></div></section>
-    <section className="podium-section"><div className="podium-stage">{podiumOrder.map(result => <div className={`podium-place rank-${result.rank}`} key={result.managerId}><div className="podium-medal">{result.rank === 1 ? "👑" : result.rank === 2 ? "🥈" : "🥉"}</div><span>#{result.rank}</span><h2>{result.managerName}</h2><strong>{result.score}</strong><small>{result.formationName}</small><div><b>FIT {result.lineupFit}</b><b>XI {result.startingXIQuality}</b><b>DEPTH {result.benchStrength}</b></div></div>)}</div></section>
-    <div className="results-grid"><section className="panel leaderboard"><div className="panel-title"><h2>Final leaderboard</h2><span>SERVER RANKED</span></div>{state.rankings.map(result => <div className={`rank-row ${result.managerId === managerId ? "you" : ""}`} key={result.managerId}><strong>#{result.rank}</strong><div><b>{result.managerName}</b><small>{result.formationName} · Fit {result.lineupFit} · Depth {result.benchStrength}</small></div><span>{result.score}</span></div>)}</section><section className="panel awards"><div className="panel-title"><h2>Awards</h2><span>MATCH HIGHLIGHTS</span></div>{state.awards.map(award => <div className="award" key={award.title}><div>✦</div><p><span>{award.title}</span><b>{award.managerName}</b><small>{award.detail}</small></p></div>)}</section></div>
-    <section className="squads"><h2>Final squads · {starterCount} starters + substitutes</h2><div className="squad-grid">{state.managers.map(manager => {
-      const starters = new Set(manager.lineup.map(item => item.footballerId));
-      return <div className="squad" key={manager.id}><div><span>{manager.avatar}</span><h3>{manager.name}</h3><b>{FORMATION_BY_ID.get(manager.formationId ?? "")?.name ?? "Formation"}</b></div><h4>STARTING TEAM · {starterCount}</h4>{manager.squad.filter(entry => starters.has(entry.footballer.id)).map(entry => <SquadRow entry={entry} key={entry.footballer.id} />)}{manager.squad.length > starterCount && <><h4>SUBSTITUTES · {manager.squad.length - starterCount}</h4>{manager.squad.filter(entry => !starters.has(entry.footballer.id)).map(entry => <SquadRow entry={entry} key={entry.footballer.id} />)}</>}</div>;
-    })}</div></section><div className="result-actions"><button className="primary" onClick={() => navigator.clipboard.writeText(`Auction Eleven winner: ${winner?.managerName} — ${winner?.formationName} — ${winner?.score} points!`)}>Copy Result</button><button className="secondary" onClick={leave}>New Match</button></div></main>;
+
+  return <main className="results page results-scroll-page">
+    <div ref={scrollAreaRef} className="results-scroll-area" data-results-scroll tabIndex={-1}>
+      <section className="winner-hero"><div className="trophy">🏆</div><div><div className="eyebrow">FORMATION ANALYSIS COMPLETE</div><h1>{winner?.managerName} wins!</h1><p>{winner?.formationName} · Final team score <strong>{winner?.score}</strong></p></div></section>
+      <section className="podium-section"><div className="podium-stage">{podiumOrder.map(result => <div className={`podium-place rank-${result.rank}`} key={result.managerId}><div className="podium-medal">{result.rank === 1 ? "👑" : result.rank === 2 ? "🥈" : "🥉"}</div><span>#{result.rank}</span><h2>{result.managerName}</h2><strong>{result.score}</strong><small>{result.formationName}</small><div><b>FIT {result.lineupFit}</b><b>XI {result.startingXIQuality}</b><b>DEPTH {result.benchStrength}</b></div></div>)}</div></section>
+      <div className="results-grid"><section className="panel leaderboard"><div className="panel-title"><h2>Final leaderboard</h2><span>SERVER RANKED</span></div>{state.rankings.map(result => <div className={`rank-row ${result.managerId === managerId ? "you" : ""}`} key={result.managerId}><strong>#{result.rank}</strong><div><b>{result.managerName}</b><small>{result.formationName} · Fit {result.lineupFit} · Depth {result.benchStrength}</small></div><span>{result.score}</span></div>)}</section><section className="panel awards"><div className="panel-title"><h2>Awards</h2><span>MATCH HIGHLIGHTS</span></div>{state.awards.map(award => <div className="award" key={award.title}><div>✦</div><p><span>{award.title}</span><b>{award.managerName}</b><small>{award.detail}</small></p></div>)}</section></div>
+      <section className="squads"><h2>Final squads · {starterCount} starters + substitutes</h2><div className="squad-grid">{state.managers.map(manager => {
+        const starters = new Set(manager.lineup.map(item => item.footballerId));
+        return <div className="squad" key={manager.id}><div><span>{manager.avatar}</span><h3>{manager.name}</h3><b>{FORMATION_BY_ID.get(manager.formationId ?? "")?.name ?? "Formation"}</b></div><h4>STARTING TEAM · {starterCount}</h4>{manager.squad.filter(entry => starters.has(entry.footballer.id)).map(entry => <SquadRow entry={entry} key={entry.footballer.id} />)}{manager.squad.length > starterCount && <><h4>SUBSTITUTES · {manager.squad.length - starterCount}</h4>{manager.squad.filter(entry => !starters.has(entry.footballer.id)).map(entry => <SquadRow entry={entry} key={entry.footballer.id} />)}</>}</div>;
+      })}</div></section>
+      <div className="result-actions"><button className="primary" onClick={() => navigator.clipboard.writeText(`Auction Eleven winner: ${winner?.managerName} — ${winner?.formationName} — ${winner?.score} points!`)}>Copy Result</button><button className="secondary" onClick={leave}>New Match</button></div>
+    </div>
+  </main>;
 }
 
 function SquadRow({ entry }: { entry: SquadEntry }) { return <p><FootballerPhoto player={entry.footballer} compact /><span>{entry.footballer.position}</span><em>{entry.footballer.name}</em><b>{entry.footballer.overall}</b></p>; }

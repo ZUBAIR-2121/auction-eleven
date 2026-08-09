@@ -125,7 +125,7 @@ describe("full squad room flow", () => {
     const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
     const created = manager.create("LimitHost", "session-limit-host", "socket-limit-host", true);
     manager.updateSettings(created.code, created.managerId, { managerLimit: 8, squadSize: 11, substituteCount: 10, playerPoolMode: "icons" });
-    expect(() => manager.start(created.code, created.managerId)).toThrow(/needs 168 unique players/i);
+    expect(() => manager.start(created.code, created.managerId)).toThrow(/needs at least 168/i);
   });
 
   it("never repeats skipped footballers when re-auction is disabled", () => {
@@ -706,8 +706,16 @@ describe("v1.9 starter-based I'M DONE completion", () => {
     vi.useFakeTimers();
     try {
       const { manager, host, room } = startTwoManagerRoom(6, 3);
-      room.managers.find(item => item.id === host.managerId)!.squad = squadWithValidStarters(6, 0);
       const state = manager.getState(host.code, host.managerId);
+      const activeIdentity = state.currentFootballer
+        ? state.currentFootballer.canonicalId ?? state.currentFootballer.catalogId ?? state.currentFootballer.id
+        : null;
+      const isNotActivePlayer = (player: (typeof FOOTBALLERS)[number]) =>
+        (player.canonicalId ?? player.catalogId ?? player.id) !== activeIdentity;
+      const goalkeeper = FOOTBALLERS.find(player => player.position === "GK" && isNotActivePlayer(player))!;
+      const outfield = FOOTBALLERS.filter(player => player.position !== "GK" && isNotActivePlayer(player)).slice(0, 5);
+      room.managers.find(item => item.id === host.managerId)!.squad = [goalkeeper, ...outfield]
+        .map((footballer, index) => ({ footballer, price: footballer.basePrice, round: index + 1 }));
       manager.bid(host.code, host.managerId, 1, "leader-before-done", state.roundId);
       expect(() => manager.completeAuction(host.code, host.managerId)).toThrow(/highest bidder/i);
     } finally { vi.clearAllTimers(); vi.useRealTimers(); }

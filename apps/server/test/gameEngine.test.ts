@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FORMATIONS, getConfiguredSquadSize, getMinimumFootballersRequired, getOpeningBid, type ManagerView, type SquadEntry } from "@auction-eleven/shared";
+import { FORMATIONS, getConfiguredSquadSize, getMinimumFootballersRequired, getOpeningBid, getSquadCompletion, type ManagerView, type SquadEntry } from "@auction-eleven/shared";
 import { FOOTBALLERS } from "../src/footballers.js";
 import { buildAutomaticLineup, DEFAULT_SETTINGS, rankManagers, validateAndBuildLineup, validateBid } from "../src/gameEngine.js";
 
@@ -80,6 +80,26 @@ describe("validateBid", () => {
     const manager: ManagerView & { budget: number } = { ...emptyManager, squad: [{ footballer, price: 1, round: 1 }] };
     const mirror = { ...footballer, id: `${footballer.id}-mirror`, catalogId: footballer.id };
     expect(validateBid({ amount: 1, currentBid: 0, manager, settings: DEFAULT_SETTINGS, auctionActive: true, footballer: mirror })).toMatch(/already own/i);
+  });
+  it("treats substitutes as optional when reserving budget for future starters", () => {
+    const goalkeeper = FOOTBALLERS.find(player => player.position === "GK")!;
+    const outfield = FOOTBALLERS.filter(player => player.position !== "GK").slice(0, 10);
+    const squad = [goalkeeper, ...outfield].map((footballer, index) => ({ footballer, price: 1, round: index + 1 }));
+    const manager: ManagerView & { budget: number } = { ...emptyManager, budget: 5, squad };
+    const substitute = FOOTBALLERS.find(player => player.position !== "GK" && !squad.some(entry => entry.footballer.id === player.id))!;
+    expect(getSquadCompletion(squad, DEFAULT_SETTINGS).startersComplete).toBe(true);
+    expect(validateBid({ amount: 5, currentBid: 0, manager, settings: DEFAULT_SETTINGS, auctionActive: true, footballer: substitute })).toBeNull();
+  });
+
+  it("reserves only the minimum budget needed for unfinished starting slots", () => {
+    const goalkeeper = FOOTBALLERS.find(player => player.position === "GK")!;
+    const outfield = FOOTBALLERS.filter(player => player.position !== "GK").slice(0, 8);
+    const squad = [goalkeeper, ...outfield].map((footballer, index) => ({ footballer, price: 1, round: index + 1 }));
+    const manager: ManagerView & { budget: number } = { ...emptyManager, budget: 3, squad };
+    const candidate = FOOTBALLERS.find(player => player.position !== "GK" && !squad.some(entry => entry.footballer.id === player.id))!;
+    expect(getSquadCompletion(squad, DEFAULT_SETTINGS).startersRemaining).toBe(2);
+    expect(validateBid({ amount: 3, currentBid: 0, manager, settings: DEFAULT_SETTINGS, auctionActive: true, footballer: candidate })).toMatch(/Keep at least 1M.*starting lineup/i);
+    expect(validateBid({ amount: 2, currentBid: 0, manager, settings: DEFAULT_SETTINGS, auctionActive: true, footballer: candidate })).toBeNull();
   });
 });
 

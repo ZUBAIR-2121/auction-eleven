@@ -184,6 +184,57 @@ export interface SquadEntry {
   round: number;
 }
 
+export interface SquadCompletion {
+  requiredStarters: number;
+  completedStarters: number;
+  startersRemaining: number;
+  maxSubstitutes: number;
+  currentSubstitutes: number;
+  maxSquadSize: number;
+  squadFull: boolean;
+  startersComplete: boolean;
+  goalkeeperReady: boolean;
+  canDeclareDone: boolean;
+}
+
+/**
+ * Auction-stage squad completion. Substitutes are optional bench depth: a
+ * manager is starter-complete as soon as the owned footballers can fill the
+ * configured pitch size under the game's hard GK/outfield rule. Final exact
+ * formation/role validation still happens on the formation screen.
+ */
+export function getSquadCompletion(
+  squad: SquadEntry[],
+  settings: Pick<GameSettings, "squadSize" | "substituteCount">
+): SquadCompletion {
+  const requiredStarters = getStartingLineupSize(settings.squadSize);
+  const maxSubstitutes = Math.min(MAX_SUBSTITUTES, Math.max(0, Math.round(settings.substituteCount)));
+  const maxSquadSize = requiredStarters + maxSubstitutes;
+  const goalkeeperCount = squad.filter(entry => entry.footballer.position === "GK").length;
+  const outfieldCount = squad.length - goalkeeperCount;
+  const goalkeeperReady = goalkeeperCount > 0;
+  const completedStarters = Math.min(
+    requiredStarters,
+    (goalkeeperReady ? 1 : 0) + Math.min(outfieldCount, Math.max(0, requiredStarters - 1))
+  );
+  const startersRemaining = Math.max(0, requiredStarters - completedStarters);
+  const startersComplete = completedStarters === requiredStarters;
+  const currentSubstitutes = Math.min(maxSubstitutes, Math.max(0, squad.length - completedStarters));
+  const squadFull = squad.length >= maxSquadSize;
+  return {
+    requiredStarters,
+    completedStarters,
+    startersRemaining,
+    maxSubstitutes,
+    currentSubstitutes,
+    maxSquadSize,
+    squadFull,
+    startersComplete,
+    goalkeeperReady,
+    canDeclareDone: startersComplete
+  };
+}
+
 export interface LineupPick {
   slotId: string;
   footballerId: string;

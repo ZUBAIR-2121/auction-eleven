@@ -5,6 +5,7 @@ import {
   getFootballerRoles,
   getOpeningBid,
   getConfiguredSquadSize,
+  getSquadCompletion,
   getStartingLineupSize,
   type Footballer,
   type FormationDefinition,
@@ -66,9 +67,16 @@ export function validateBid(args: {
   if (catalogueId && manager.squad.some(entry => (entry.footballer.canonicalId ?? entry.footballer.catalogId ?? entry.footballer.id) === catalogueId)) {
     return `You already own ${footballer?.name ?? "this footballer"}.`;
   }
-  const playersStillNeededAfterWin = Math.max(0, maximumSquadSize - manager.squad.length - 1);
-  const reserve = playersStillNeededAfterWin * settings.minimumBid;
-  if (manager.budget - amount < reserve) return `Keep at least ${reserve}M to complete your ${maximumSquadSize}-player squad target.`;
+  const projectedSquad = footballer
+    ? [...manager.squad, { footballer, price: amount, round: 0 }]
+    : manager.squad;
+  const completionAfterWin = getSquadCompletion(projectedSquad, settings);
+  const remainingCapacity = Math.max(0, maximumSquadSize - projectedSquad.length);
+  if (remainingCapacity < completionAfterWin.startersRemaining) {
+    return `This signing would leave too few squad spots to complete your ${completionAfterWin.requiredStarters}-player starting lineup.`;
+  }
+  const reserve = completionAfterWin.startersRemaining * settings.minimumBid;
+  if (manager.budget - amount < reserve) return `Keep at least ${reserve}M to complete your required starting lineup.`;
   return null;
 }
 

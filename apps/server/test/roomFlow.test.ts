@@ -587,3 +587,169 @@ describe("v1.8 canonical eligible pools, manual selection and pool sizes", () =>
     expect(custom).toBe(60);
   });
 });
+
+describe("v1.9 starter-based I'M DONE completion", () => {
+  type MutableManager = {
+    id: string;
+    auctionComplete: boolean;
+    squad: Array<{ footballer: (typeof FOOTBALLERS)[number]; price: number; round: number }>;
+  };
+  type MutableRoom = { managers: MutableManager[] };
+  type MutableRoomManager = { rooms: Map<string, MutableRoom> };
+
+  const squadWithValidStarters = (starterCount: number, extraSubs = 0) => {
+    const goalkeeper = FOOTBALLERS.find(player => player.position === "GK")!;
+    const outfield = FOOTBALLERS.filter(player => player.position !== "GK").slice(0, starterCount - 1 + extraSubs);
+    return [goalkeeper, ...outfield].map((footballer, index) => ({ footballer, price: footballer.basePrice, round: index + 1 }));
+  };
+
+  const squadWithoutGoalkeeper = (count: number) => FOOTBALLERS
+    .filter(player => player.position !== "GK")
+    .slice(0, count)
+    .map((footballer, index) => ({ footballer, price: footballer.basePrice, round: index + 1 }));
+
+  const startTwoManagerRoom = (starterCount = 11, substituteCount = 6) => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const host = manager.create("DoneHost", `session-done-host-${starterCount}-${substituteCount}`, `socket-done-host-${starterCount}-${substituteCount}`, false);
+    manager.updateSettings(host.code, host.managerId, { managerLimit: 2, squadSize: starterCount as 6 | 7 | 8 | 9 | 10 | 11, substituteCount: substituteCount as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 });
+    const guest = manager.join(host.code, "DoneGuest", `session-done-guest-${starterCount}-${substituteCount}`, `socket-done-guest-${starterCount}-${substituteCount}`);
+    manager.setReady(host.code, host.managerId, true);
+    manager.setReady(host.code, guest.managerId, true);
+    manager.start(host.code, host.managerId);
+    return { manager, host, guest, room: (manager as unknown as MutableRoomManager).rooms.get(host.code)! };
+  };
+
+  it("allows I'M DONE with all required starters and zero substitutes", () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, host, room } = startTwoManagerRoom(11, 6);
+      room.managers.find(item => item.id === host.managerId)!.squad = squadWithValidStarters(11, 0);
+      expect(() => manager.completeAuction(host.code, host.managerId)).not.toThrow();
+      expect(manager.getState(host.code, host.managerId).managers.find(item => item.id === host.managerId)?.auctionComplete).toBe(true);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("allows I'M DONE with a partially filled optional bench", () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, host, room } = startTwoManagerRoom(11, 6);
+      room.managers.find(item => item.id === host.managerId)!.squad = squadWithValidStarters(11, 3);
+      expect(() => manager.completeAuction(host.code, host.managerId)).not.toThrow();
+      expect(manager.getState(host.code, host.managerId).managers.find(item => item.id === host.managerId)?.auctionComplete).toBe(true);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("allows I'M DONE with a full bench and prevents purchases beyond capacity", () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, host, room } = startTwoManagerRoom(11, 6);
+      room.managers.find(item => item.id === host.managerId)!.squad = squadWithValidStarters(11, 6);
+      expect(() => manager.completeAuction(host.code, host.managerId)).not.toThrow();
+      const state = manager.getState(host.code, host.managerId);
+      expect(state.managers.find(item => item.id === host.managerId)?.auctionComplete).toBe(true);
+      expect(() => manager.bid(host.code, host.managerId, 1, "done-full-bid", state.roundId)).toThrow(/complete|finished bidding/i);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("rejects I'M DONE when total ownership is large but the starting lineup is invalid", () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, host, room } = startTwoManagerRoom(11, 6);
+      room.managers.find(item => item.id === host.managerId)!.squad = squadWithoutGoalkeeper(16);
+      expect(() => manager.completeAuction(host.code, host.managerId)).toThrow(/still need 1 starting player.*goalkeeper/i);
+      expect(manager.getState(host.code, host.managerId).managers.find(item => item.id === host.managerId)?.auctionComplete).toBe(false);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("uses the configured smaller starter count instead of hard-coding eleven", () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, host, room } = startTwoManagerRoom(8, 4);
+      room.managers.find(item => item.id === host.managerId)!.squad = squadWithValidStarters(8, 0);
+      expect(() => manager.completeAuction(host.code, host.managerId)).not.toThrow();
+      expect(manager.getState(host.code, host.managerId).managers.find(item => item.id === host.managerId)?.auctionComplete).toBe(true);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("keeps DONE persistent across rounds and reconnects while PASS resets", () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, host, guest, room } = startTwoManagerRoom(6, 3);
+      room.managers.find(item => item.id === host.managerId)!.squad = squadWithValidStarters(6, 0);
+      manager.completeAuction(host.code, host.managerId);
+      let state = manager.getState(host.code, host.managerId);
+      manager.pass(host.code, guest.managerId, "guest-pass-after-host-done", state.roundId);
+      expect(manager.getState(host.code, host.managerId).phase).toBe("round_result");
+      vi.advanceTimersByTime(2100);
+      state = manager.getState(host.code, host.managerId);
+      expect(state.phase).toBe("auction");
+      expect(state.managers.find(item => item.id === host.managerId)?.auctionComplete).toBe(true);
+      expect(state.passedManagerIds).not.toContain(host.managerId);
+      manager.resume(host.code, "session-done-host-6-3", "socket-done-host-reconnected");
+      expect(manager.getState(host.code, host.managerId).managers.find(item => item.id === host.managerId)?.auctionComplete).toBe(true);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("rejects crafted bids and passes from a DONE manager", () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, host, room } = startTwoManagerRoom(6, 3);
+      room.managers.find(item => item.id === host.managerId)!.squad = squadWithValidStarters(6, 0);
+      manager.completeAuction(host.code, host.managerId);
+      const state = manager.getState(host.code, host.managerId);
+      expect(() => manager.bid(host.code, host.managerId, 1, "crafted-done-bid", state.roundId)).toThrow(/complete|finished bidding/i);
+      expect(() => manager.pass(host.code, host.managerId, "crafted-done-pass", state.roundId)).toThrow(/finished bidding/i);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("does not allow the unresolved highest bidder to press I'M DONE", () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, host, room } = startTwoManagerRoom(6, 3);
+      room.managers.find(item => item.id === host.managerId)!.squad = squadWithValidStarters(6, 0);
+      const state = manager.getState(host.code, host.managerId);
+      manager.bid(host.code, host.managerId, 1, "leader-before-done", state.roundId);
+      expect(() => manager.completeAuction(host.code, host.managerId)).toThrow(/highest bidder/i);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("moves to formation exactly once when the last manager declares DONE", () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, host, guest, room } = startTwoManagerRoom(6, 3);
+      room.managers.find(item => item.id === host.managerId)!.squad = squadWithValidStarters(6, 0);
+      room.managers.find(item => item.id === guest.managerId)!.squad = squadWithValidStarters(6, 0);
+      const formationSpy = vi.spyOn(manager as unknown as { beginFormation: (room: unknown) => void }, "beginFormation");
+      manager.completeAuction(host.code, host.managerId);
+      expect(manager.getState(host.code, host.managerId).phase).toBe("auction");
+      manager.completeAuction(host.code, guest.managerId);
+      expect(manager.getState(host.code, host.managerId).phase).toBe("formation");
+      expect(formationSpy).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(30000);
+      expect(formationSpy).toHaveBeenCalledTimes(1);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("DONE managers are excluded from last-bidder completion logic", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const host = manager.create("DoneA", "session-done-a", "socket-done-a", false);
+      manager.updateSettings(host.code, host.managerId, { managerLimit: 3, squadSize: 6, substituteCount: 3 });
+      const b = manager.join(host.code, "DoneB", "session-done-b", "socket-done-b");
+      const c = manager.join(host.code, "DoneC", "session-done-c", "socket-done-c");
+      [host.managerId, b.managerId, c.managerId].forEach(id => manager.setReady(host.code, id, true));
+      manager.start(host.code, host.managerId);
+      const room = (manager as unknown as MutableRoomManager).rooms.get(host.code)!;
+      room.managers.find(item => item.id === host.managerId)!.squad = squadWithValidStarters(6, 0);
+      manager.completeAuction(host.code, host.managerId);
+      let state = manager.getState(host.code, c.managerId);
+      manager.bid(host.code, c.managerId, 1, "c-leads-with-a-done", state.roundId);
+      expect(manager.getState(host.code, c.managerId).phase).toBe("auction");
+      manager.pass(host.code, b.managerId, "b-passes-with-a-done", state.roundId);
+      state = manager.getState(host.code, c.managerId);
+      expect(state.phase).toBe("round_result");
+      expect(state.lastWinner?.managerName).toBe("DoneC");
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+});

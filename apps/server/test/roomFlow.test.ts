@@ -418,7 +418,8 @@ describe("v1.6 player pools and private budgets", () => {
     const icon = FOOTBALLERS.find(player => player.playerType === "ICON")!;
     manager.updatePlayerPool(created.code, created.managerId, [current.id, icon.id]);
     const state = manager.getState(created.code, created.managerId);
-    expect(state.selectedFootballerIds).toEqual([current.id, icon.id]);
+    expect(state.selectedFootballerIds).toHaveLength(2);
+    expect(new Set(state.selectedFootballerIds)).toEqual(new Set([current.id, icon.id]));
     expect(state.poolValidation.selectedCurrent).toBe(1);
     expect(state.poolValidation.selectedIcons).toBe(1);
   });

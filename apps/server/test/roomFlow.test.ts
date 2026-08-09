@@ -752,4 +752,30 @@ describe("v1.9 starter-based I'M DONE completion", () => {
       expect(state.lastWinner?.managerName).toBe("DoneC");
     } finally { vi.clearAllTimers(); vi.useRealTimers(); }
   });
+  it("cancels stale bot decisions when the auction round changes", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const host = manager.create("BotTimerHost", "session-bot-timer", "socket-bot-timer", true);
+      manager.updateSettings(host.code, host.managerId, { managerLimit: 2, squadSize: 6, substituteCount: 0, auctionSeconds: 12, botDifficulty: "Legendary" });
+      manager.setReady(host.code, host.managerId, true);
+      const first = manager.getState(host.code, host.managerId);
+      // Solo bots are already ready; start after the host is ready.
+      manager.start(host.code, host.managerId);
+      const active = manager.getState(host.code, host.managerId);
+      const firstPlayerId = active.currentFootballer!.id;
+      const firstRoundId = active.roundId;
+      const unsafe = manager as unknown as { endRound: (code: string, roundId: string) => void };
+      unsafe.endRound(host.code, firstRoundId);
+      vi.advanceTimersByTime(2100);
+      const next = manager.getState(host.code, host.managerId);
+      expect(next.roundId).not.toBe(firstRoundId);
+      expect(next.currentFootballer?.id).not.toBe(firstPlayerId);
+      vi.advanceTimersByTime(10000);
+      const afterOldBotWindows = manager.getState(host.code, host.managerId);
+      expect(afterOldBotWindows.managers.flatMap(item => item.squad).filter(entry => entry.footballer.id === firstPlayerId)).toHaveLength(0);
+      expect(first.phase).toBe("lobby");
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
 });

@@ -12,6 +12,8 @@ const emptyManager: ManagerView & { budget: number } = {
   connected: true,
   isHost: true,
   isBot: false,
+  aiTakeover: false,
+  reconnectDeadline: null,
   squad: [],
   joinedAt: 1,
   formationId: null,

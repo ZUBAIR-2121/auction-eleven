@@ -593,6 +593,7 @@ describe("v1.9 starter-based I'M DONE completion", () => {
   type MutableManager = {
     id: string;
     auctionComplete: boolean;
+    budget: number;
     squad: Array<{ footballer: (typeof FOOTBALLERS)[number]; price: number; round: number }>;
   };
   type MutableRoom = { managers: MutableManager[] };
@@ -784,6 +785,121 @@ describe("v1.9 starter-based I'M DONE completion", () => {
       const afterOldBotWindows = manager.getState(host.code, host.managerId);
       expect(afterOldBotWindows.managers.flatMap(item => item.squad).filter(entry => entry.footballer.id === firstPlayerId)).toHaveLength(0);
       expect(first.phase).toBe("lobby");
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("keeps a disconnected human seat during grace and does not start AI if they reconnect in time", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const host = manager.create("GraceHost", "session-grace-host", "socket-grace-host", false);
+      manager.updateSettings(host.code, host.managerId, { managerLimit: 2, squadSize: 6, substituteCount: 0, auctionSeconds: 30 });
+      const guest = manager.join(host.code, "GraceGuest", "session-grace-guest", "socket-grace-guest");
+      [host.managerId, guest.managerId].forEach(id => manager.setReady(host.code, id, true));
+      manager.start(host.code, host.managerId);
+      manager.disconnect("socket-grace-guest");
+      let state = manager.getState(host.code, host.managerId);
+      let guestState = state.managers.find(item => item.id === guest.managerId)!;
+      expect(guestState.connected).toBe(false);
+      expect(guestState.isBot).toBe(false);
+      expect(guestState.aiTakeover).toBe(false);
+      expect(guestState.reconnectDeadline).not.toBeNull();
+
+      vi.advanceTimersByTime(5_000);
+      manager.resume(host.code, "session-grace-guest", "socket-grace-return");
+      state = manager.getState(host.code, guest.managerId);
+      guestState = state.managers.find(item => item.id === guest.managerId)!;
+      expect(guestState.connected).toBe(true);
+      expect(guestState.isBot).toBe(false);
+      expect(guestState.aiTakeover).toBe(false);
+      expect(guestState.reconnectDeadline).toBeNull();
+
+      vi.advanceTimersByTime(20_000);
+      guestState = manager.getState(host.code, guest.managerId).managers.find(item => item.id === guest.managerId)!;
+      expect(guestState.isBot).toBe(false);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("hands an active disconnected human seat to Legendary AI and preserves the same squad and budget", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const host = manager.create("TakeHost", "session-take-host", "socket-take-host", false);
+      manager.updateSettings(host.code, host.managerId, { managerLimit: 2, squadSize: 6, substituteCount: 2, auctionSeconds: 30 });
+      const guest = manager.join(host.code, "TakeGuest", "session-take-guest", "socket-take-guest");
+      [host.managerId, guest.managerId].forEach(id => manager.setReady(host.code, id, true));
+      manager.start(host.code, host.managerId);
+      const unsafe = manager as unknown as MutableRoomManager;
+      const room = unsafe.rooms.get(host.code)! as MutableRoom & { managers: Array<MutableRoom["managers"][number] & { budget: number }> };
+      const internalGuest = room.managers.find(item => item.id === guest.managerId)!;
+      const owned = FOOTBALLERS.find(player => player.id !== manager.getState(host.code).currentFootballer?.id)!;
+      internalGuest.squad = [{ footballer: owned, price: 12, round: 1 }];
+      internalGuest.budget = 321;
+
+      manager.disconnect("socket-take-guest");
+      vi.advanceTimersByTime(20_050);
+      const state = manager.getState(host.code, host.managerId);
+      const takeover = state.managers.find(item => item.id === guest.managerId)!;
+      expect(takeover.isBot).toBe(true);
+      expect(takeover.aiTakeover).toBe(true);
+      expect(takeover.connected).toBe(true);
+      expect(takeover.name).toBe("TakeGuest");
+      expect(takeover.budget).toBeNull();
+      expect(takeover.squad.map(entry => entry.footballer.id)).toEqual([owned.id]);
+
+      manager.resume(host.code, "session-take-guest", "socket-take-return");
+      const reclaimed = manager.getState(host.code, guest.managerId).managers.find(item => item.id === guest.managerId)!;
+      expect(reclaimed.isBot).toBe(false);
+      expect(reclaimed.aiTakeover).toBe(false);
+      expect(reclaimed.connected).toBe(true);
+      expect(reclaimed.budget).toBe(321);
+      expect(reclaimed.squad.map(entry => entry.footballer.id)).toEqual([owned.id]);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("preserves PASS and an accepted highest bid across disconnect takeover", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const host = manager.create("StateHost", "session-state-host", "socket-state-host", false);
+      manager.updateSettings(host.code, host.managerId, { managerLimit: 3, squadSize: 6, substituteCount: 1, auctionSeconds: 30 });
+      const b = manager.join(host.code, "StateB", "session-state-b", "socket-state-b");
+      const c = manager.join(host.code, "StateC", "session-state-c", "socket-state-c");
+      [host.managerId, b.managerId, c.managerId].forEach(id => manager.setReady(host.code, id, true));
+      manager.start(host.code, host.managerId);
+      let state = manager.getState(host.code, b.managerId);
+      manager.bid(host.code, b.managerId, 1, "state-bid", state.roundId);
+      manager.disconnect("socket-state-b");
+      state = manager.getState(host.code, host.managerId);
+      expect(state.highestBidderId).toBe(b.managerId);
+      expect(state.currentBid).toBe(1);
+      expect(state.passedManagerIds).toContain(b.managerId);
+      vi.advanceTimersByTime(20_050);
+      state = manager.getState(host.code, host.managerId);
+      expect(state.highestBidderId).toBe(b.managerId);
+      expect(state.currentBid).toBe(1);
+      expect(state.passedManagerIds).toContain(b.managerId);
+      expect(state.managers.find(item => item.id === b.managerId)?.aiTakeover).toBe(true);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("explicit active leave immediately hands gameplay to AI and migrates host authority", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const host = manager.create("LeaveHost", "session-leave-host", "socket-leave-host", false);
+      manager.updateSettings(host.code, host.managerId, { managerLimit: 2, squadSize: 6, substituteCount: 1, auctionSeconds: 30 });
+      const guest = manager.join(host.code, "LeaveGuest", "session-leave-guest", "socket-leave-guest");
+      [host.managerId, guest.managerId].forEach(id => manager.setReady(host.code, id, true));
+      manager.start(host.code, host.managerId);
+      manager.leave(host.code, host.managerId);
+      const state = manager.getState(host.code, guest.managerId);
+      const oldHost = state.managers.find(item => item.id === host.managerId)!;
+      const newHost = state.managers.find(item => item.id === guest.managerId)!;
+      expect(oldHost.aiTakeover).toBe(true);
+      expect(oldHost.isBot).toBe(true);
+      expect(oldHost.isHost).toBe(false);
+      expect(newHost.isHost).toBe(true);
     } finally { vi.clearAllTimers(); vi.useRealTimers(); }
   });
 

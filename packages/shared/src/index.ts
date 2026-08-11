@@ -255,6 +255,10 @@ export interface ManagerView {
   connected: boolean;
   isHost: boolean;
   isBot: boolean;
+  /** True when a disconnected human seat is temporarily controlled by Legendary AI. */
+  aiTakeover: boolean;
+  /** Reconnect grace deadline for a disconnected human seat, or null when not waiting. */
+  reconnectDeadline: number | null;
   squad: SquadEntry[];
   joinedAt: number;
   formationId: string | null;

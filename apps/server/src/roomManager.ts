@@ -51,6 +51,8 @@ interface InternalManager extends Omit<ManagerView, "budget"> {
   sessionId: string;
   socketId: string | null;
   botPersonality?: BotPersonality;
+  botDifficultyOverride?: "Amateur" | "Professional" | "World Class" | "Legendary";
+  controllerVersion: number;
 }
 
 interface InternalRoom extends Omit<RoomState, "managers" | "availableFootballers" | "poolSelectionValid" | "poolValidation" | "hasPassword"> {
@@ -501,7 +503,7 @@ export class RoomManager {
       totalRounds: room.totalRounds,
       timeRemainingMs: Math.max(0, (room.endsAt ?? Date.now()) - Date.now()),
       settings: room.settings,
-      difficulty: room.settings.botDifficulty,
+      difficulty: bot.botDifficultyOverride ?? room.settings.botDifficulty,
       personality: bot.botPersonality ?? "BALANCED",
       opponents: this.publicOpponentsForBot(room, bot.id),
       opponentModels: room.botOpponentModels,
@@ -527,7 +529,7 @@ export class RoomManager {
         squad: manager.squad,
         budget: manager.budget,
         settings: room.settings,
-        difficulty: room.settings.botDifficulty,
+        difficulty: manager.botDifficultyOverride ?? room.settings.botDifficulty,
         personality: manager.botPersonality ?? "BALANCED",
         remainingRounds: Math.max(0, room.totalRounds - room.roundIndex - 1),
         marketHistory: room.botMarketHistory,
@@ -647,6 +649,39 @@ export class RoomManager {
       this.broadcast(latest);
       this.emitDirectoryChanged();
     }, 30_000);
+    room.disconnectTimers.set(managerId, timer);
+  }
+
+  private activateLegendaryTakeover(room: InternalRoom, managerId: string): void {
+    const manager = room.managers.find(item => item.id === managerId);
+    if (!manager || manager.connected || manager.isBot) return;
+    this.clearDisconnectTimer(room, managerId);
+    manager.isBot = true;
+    manager.aiTakeover = true;
+    manager.connected = true;
+    manager.socketId = null;
+    manager.reconnectDeadline = null;
+    manager.botDifficultyOverride = "Legendary";
+    manager.botPersonality = manager.botPersonality ?? "TACTICIAN";
+    manager.controllerVersion++;
+    manager.ready = true;
+    if (room.phase === "formation" && !manager.lineupSubmitted) manager.lineupSubmitted = true;
+    this.broadcast(room);
+    if (room.phase === "auction") this.scheduleBots(room);
+    if (room.phase === "formation" && room.managers.every(item => item.lineupSubmitted)) this.finish(room);
+  }
+
+  private scheduleActiveDisconnectTakeover(room: InternalRoom, managerId: string, delay = 20_000): void {
+    this.clearDisconnectTimer(room, managerId);
+    const manager = room.managers.find(item => item.id === managerId);
+    if (!manager || manager.isBot) return;
+    manager.reconnectDeadline = Date.now() + delay;
+    const timer = this.safeTimer(room, "active_disconnect_takeover", () => {
+      const latest = this.rooms.get(room.code);
+      const candidate = latest?.managers.find(item => item.id === managerId);
+      if (!latest || !candidate || candidate.connected || candidate.isBot) return;
+      this.activateLegendaryTakeover(latest, managerId);
+    }, delay);
     room.disconnectTimers.set(managerId, timer);
   }
 
@@ -817,6 +852,8 @@ export class RoomManager {
       connected: true,
       isHost,
       isBot,
+      aiTakeover: false,
+      reconnectDeadline: null,
       squad: [],
       joinedAt: Date.now() + joinedAt,
       formationId: null,
@@ -826,7 +863,8 @@ export class RoomManager {
       auctionComplete: false,
       sessionId,
       socketId,
-      botPersonality: isBot ? personalityForIndex(Math.max(0, joinedAt - 1)) : undefined
+      botPersonality: isBot ? personalityForIndex(Math.max(0, joinedAt - 1)) : undefined,
+      controllerVersion: 0
     };
   }
 
@@ -837,11 +875,21 @@ export class RoomManager {
 
     // A browser that already owns a seat should reconnect to that seat instead
     // of consuming another room slot or creating a duplicate manager.
-    const existing = room.managers.find(manager => !manager.isBot && manager.sessionId === sessionId);
+    const existing = room.managers.find(manager => (!manager.isBot || manager.aiTakeover) && manager.sessionId === sessionId);
     if (existing) {
       this.clearDisconnectTimer(room, existing.id);
       existing.socketId = socketId;
       existing.connected = true;
+      existing.reconnectDeadline = null;
+      if (existing.aiTakeover) {
+        existing.isBot = false;
+        existing.aiTakeover = false;
+        existing.botDifficultyOverride = undefined;
+        existing.botPersonality = undefined;
+        existing.controllerVersion++;
+        if (room.phase === "formation" && !room.managers.every(item => item.lineupSubmitted)) existing.lineupSubmitted = false;
+        if (room.phase === "auction") this.scheduleBots(room);
+      }
       this.broadcast(room);
       this.emitDirectoryChanged();
       return { code, managerId: existing.id };
@@ -919,6 +967,16 @@ export class RoomManager {
     this.clearDisconnectTimer(room, manager.id);
     manager.socketId = socketId;
     manager.connected = true;
+    manager.reconnectDeadline = null;
+    if (manager.aiTakeover) {
+      manager.isBot = false;
+      manager.aiTakeover = false;
+      manager.botDifficultyOverride = undefined;
+      manager.botPersonality = undefined;
+      manager.controllerVersion++;
+      if (room.phase === "formation" && !room.managers.every(item => item.lineupSubmitted)) manager.lineupSubmitted = false;
+      if (room.phase === "auction") this.scheduleBots(room);
+    }
     this.broadcast(room);
     this.emitDirectoryChanged();
     return { managerId: manager.id };
@@ -960,12 +1018,10 @@ export class RoomManager {
 
     manager.connected = false;
     manager.socketId = null;
+    manager.reconnectDeadline = null;
     this.migrateHostIfNeeded(room);
-    this.markManagerPassedForCurrentRound(room, manager.id);
-    if (!this.evaluateAuctionCompletion(room)) {
-      this.broadcast(room);
-      if (room.phase === "auction") this.scheduleBots(room);
-    }
+    this.activateLegendaryTakeover(room, manager.id);
+    if (room.phase === "auction" && !this.evaluateAuctionCompletion(room)) this.scheduleBots(room);
     this.emitDirectoryChanged();
   }
 
@@ -976,7 +1032,11 @@ export class RoomManager {
       manager.connected = false;
       manager.socketId = null;
       this.migrateHostIfNeeded(room);
-      if (room.phase === "lobby" && !room.isSolo) this.scheduleLobbyDisconnectCleanup(room, manager.id);
+      if (room.phase === "lobby" && !room.isSolo) {
+        this.scheduleLobbyDisconnectCleanup(room, manager.id);
+      } else if (!room.isSolo && room.phase !== "finished" && !manager.isBot) {
+        this.scheduleActiveDisconnectTakeover(room, manager.id);
+      }
       this.markManagerPassedForCurrentRound(room, manager.id);
       if (!this.evaluateAuctionCompletion(room)) {
         this.broadcast(room);
@@ -1002,11 +1062,14 @@ export class RoomManager {
     if (target.isHost) throw new Error("The host seat cannot be replaced by AI.");
     this.clearDisconnectTimer(room, target.id);
     target.isBot = true;
+    target.aiTakeover = false;
     target.connected = true;
     target.socketId = null;
+    target.reconnectDeadline = null;
     target.sessionId = `bot-${this.id("session")}`;
     target.name = `${target.name.replace(/ AI$/, "")} AI`;
     target.botPersonality = personalityForIndex(Math.max(0, room.managers.filter(manager => manager.isBot).length - 1));
+    target.controllerVersion++;
     target.ready = true;
     if (room.phase === "formation" && !target.lineupSubmitted) target.lineupSubmitted = true;
     this.broadcast(room);
@@ -1216,6 +1279,7 @@ export class RoomManager {
     );
 
     bots.forEach((bot, index) => {
+      const controllerVersion = bot.controllerVersion;
       const seed = crypto.randomInt(1, 0x7fffffff);
       const initialContext = this.botDecisionContext(room, bot, seed);
       if (!initialContext) return;
@@ -1226,7 +1290,7 @@ export class RoomManager {
         const latest = this.rooms.get(room.code);
         if (!latest || latest.phase !== "auction" || latest.transitionRoundId || latest.roundId !== roundId || latest.currentFootballer?.id !== footballer.id) return;
         const activeBot = latest.managers.find(manager => manager.id === bot.id);
-        if (!activeBot || activeBot.auctionComplete || latest.passedManagerIds.includes(activeBot.id)) return;
+        if (!activeBot || !activeBot.isBot || activeBot.controllerVersion !== controllerVersion || activeBot.auctionComplete || latest.passedManagerIds.includes(activeBot.id)) return;
         const context = this.botDecisionContext(latest, activeBot, stableBotSeed(seed, latest.currentBid, latest.bidHistory.length));
         if (!context) return;
         const decision = evaluateBotDecision(context);
@@ -1240,7 +1304,7 @@ export class RoomManager {
             botId: activeBot.id,
             botName: activeBot.name,
             personality: activeBot.botPersonality ?? "BALANCED",
-            difficulty: latest.settings.botDifficulty,
+            difficulty: activeBot.botDifficultyOverride ?? latest.settings.botDifficulty,
             player: footballer.name,
             action: decision.action,
             bidAmount: decision.bidAmount,

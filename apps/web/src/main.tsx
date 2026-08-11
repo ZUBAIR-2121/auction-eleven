@@ -448,7 +448,7 @@ function App() {
     if (!force && state && state.phase !== "lobby" && state.phase !== "finished") {
       const message = state.isSolo
         ? "Leave this Solo Practice match? Your current progress will be lost."
-        : "Leave this live room? Your manager will remain in the match as disconnected.";
+        : "Leave match? A Legendary AI will immediately continue playing your existing team. You can reclaim the same seat if this browser reconnects while the match is still active.";
       if (!confirm(message)) return;
     }
     const finish = () => {
@@ -488,7 +488,7 @@ function App() {
     const onPopState = () => {
       if (!state || document.body.classList.contains("ae-overlay-open")) return;
       if (state.phase !== "lobby" && state.phase !== "finished") {
-        const shouldLeave = window.confirm("Leave this match? Your manager seat can be recovered if you reconnect with this browser.");
+        const shouldLeave = window.confirm("Leave match? A Legendary AI will continue your existing team. Stay if you want to keep controlling the manager yourself.");
         if (!shouldLeave) {
           window.history.pushState({ aeApp: true, aeRoom: state.code, aePhase: state.phase }, "", window.location.href);
           return;
@@ -1042,47 +1042,66 @@ const FormationClock = React.memo(function FormationClock({ endsAt }: { endsAt: 
   return <div className="formation-clock"><span>LINEUP DEADLINE</span><b>{Math.floor(seconds / 60)}:{String(Math.ceil(seconds % 60)).padStart(2, "0")}</b></div>;
 });
 
-const PlayerCard = React.memo(function PlayerCard({ player, iconSurprise = false }: { player: Footballer; iconSurprise?: boolean }) {
+const PlayerCard = React.memo(function PlayerCard({ player, iconSurprise = false, compactAuction = false, onDetails }: { player: Footballer; iconSurprise?: boolean; compactAuction?: boolean; onDetails?: () => void }) {
   const primaryRoles = getFootballerPrimaryRoles(player);
   const secondaryRoles = getFootballerSecondaryRoles(player);
   const roles = [...primaryRoles, ...secondaryRoles];
   const type = player.playerType ?? "CURRENT";
-  return <motion.div key={player.id} initial={{ opacity: 0, scale: .94, y: 24 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: .45, ease: [0.22, 1, 0.36, 1] }} className={`player-card rarity-${player.rarity.toLowerCase()} ${type === "ICON" ? "player-type-icon" : "player-type-current"}`}>
+  return <motion.div key={player.id} initial={{ opacity: 0, scale: .96, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: .28, ease: [0.22, 1, 0.36, 1] }} className={`player-card rarity-${player.rarity.toLowerCase()} ${type === "ICON" ? "player-type-icon" : "player-type-current"} ${compactAuction ? "auction-player-compact" : ""}`}>
     {type === "ICON" && iconSurprise && <div className="icon-surprise-banner">★ ICON ENTERS THE AUCTION</div>}
-    <div className="card-top"><span>{type === "ICON" ? "ICON" : player.rarity}</span><b>{primaryRoles.join(" / ")}</b></div><div className="rating">{player.overall}</div><FootballerPhoto player={player} /><h2>{player.name}</h2><p>{player.country} · {type === "ICON" ? "Football legend" : "Current footballer"}</p><div className="player-type-line"><span className={`player-type-chip ${type === "ICON" ? "icon" : "current"}`}>{type}</span><span>PRIMARY {primaryRoles.join(" · ")}</span>{secondaryRoles.length > 0 && <span>SECONDARY {secondaryRoles.join(" · ")}</span>}</div><div className="player-roles" aria-label="Playable positions">{roles.map(role => <span className={primaryRoles.includes(role) ? "primary" : ""} key={role}>{role}</span>)}</div><div className="stats"><Stat value={player.pace} label="PAC" /><Stat value={player.shooting} label="SHO" /><Stat value={player.passing} label="PAS" /><Stat value={player.dribbling} label="DRI" /><Stat value={player.defending} label="DEF" /><Stat value={player.physical} label="PHY" /></div><div className="trait">✦ {player.trait}</div>
+    <div className="card-top"><span>{type === "ICON" ? "ICON" : player.rarity}</span><b>{primaryRoles.join(" / ")}</b></div>
+    <div className="rating">{player.overall}</div>
+    <FootballerPhoto player={player} />
+    <div className="auction-player-copy">
+      <h2>{player.name}</h2>
+      <p>{player.country} · {type === "ICON" ? "Football legend" : "Current footballer"}</p>
+      <div className="player-type-line"><span className={`player-type-chip ${type === "ICON" ? "icon" : "current"}`}>{type}</span><span>PRIMARY {primaryRoles.join(" · ")}</span>{secondaryRoles.length > 0 && <span>SECONDARY {secondaryRoles.join(" · ")}</span>}</div>
+      {!compactAuction && <><div className="player-roles" aria-label="Playable positions">{roles.map(role => <span className={primaryRoles.includes(role) ? "primary" : ""} key={role}>{role}</span>)}</div><div className="stats"><Stat value={player.pace} label="PAC" /><Stat value={player.shooting} label="SHO" /><Stat value={player.passing} label="PAS" /><Stat value={player.dribbling} label="DRI" /><Stat value={player.defending} label="DEF" /><Stat value={player.physical} label="PHY" /></div><div className="trait">✦ {player.trait}</div></>}
+      {compactAuction && onDetails && <button type="button" className="player-details-link" onClick={onDetails}>PLAYER DETAILS</button>}
+    </div>
   </motion.div>;
 });
 
 function Stat({ value, label }: { value: number; label: string }) { return <div><b>{value}</b><span>{label}</span></div>; }
 
-function squadPositionCounts(squad: SquadEntry[]): PoolTargets {
-  const counts: PoolTargets = { GK: 0, DEF: 0, MID: 0, FWD: 0 };
-  squad.forEach(entry => { counts[entry.footballer.position]++; });
-  return counts;
+function PlayerDetailsModal({ player, onClose }: { player: Footballer; onClose: () => void }) {
+  const close = useBackClosable(true, onClose, "player-details");
+  return <div className="modal-backdrop auction-overlay" onMouseDown={event => { if (event.target === event.currentTarget) close(); }}><section className="auction-info-modal player-details-modal"><header><div><span>FOOTBALLER DETAILS</span><strong>{player.name}</strong></div><button aria-label="Close player details" onClick={close}>×</button></header><div className="auction-info-body"><PlayerCard player={player} /></div></section></div>;
 }
 
-const SquadTracker = React.memo(function SquadTracker({ squad, currentPosition, squadSize, substituteCount }: { squad: SquadEntry[]; currentPosition?: Position; squadSize: SquadSize; substituteCount: SubstituteCount }) {
-  const [expanded, setExpanded] = useState(false);
-  const counts = squadPositionCounts(squad);
-  const targets = getSquadPositionTargets(getStartingLineupSize(squadSize));
-  const completion = getSquadCompletion(squad, { squadSize, substituteCount });
-  return <section className={`squad-tracker ${expanded ? "expanded" : ""}`}>
-    <button className="tracker-head" onClick={() => setExpanded(value => !value)}><div><span>MY AUCTION SQUAD</span><strong>{squad.length}<i>/{completion.maxSquadSize}</i></strong></div><b>{expanded ? "−" : "+"}</b></button>
-    <div className={`tracker-completion ${completion.startersComplete ? "starting-complete" : ""}`}><div><span>STARTERS</span><strong>{completion.completedStarters}/{completion.requiredStarters}</strong><small>{completion.startersComplete ? "Starting lineup complete ✓" : `${completion.startersRemaining} more needed`}</small></div><div><span>BENCH</span><strong>{completion.currentSubstitutes}/{completion.maxSubstitutes}</strong><small>{completion.maxSubstitutes ? "optional substitutes" : "no bench slots"}</small></div></div>
-    <div className="position-tracker">{POSITIONS.map(position => {
-      const remaining = Math.max(0, targets[position] - counts[position]);
-      return <div className={`${currentPosition === position ? "current" : ""} ${remaining === 0 ? "complete" : ""}`} key={position}><span>{position}</span><strong>{counts[position]}<i>/{targets[position]}</i></strong><small>{remaining ? `${remaining} target` : "covered"}</small></div>;
-    })}</div>
-    {expanded && <div className="tracker-list">{squad.length ? squad.slice().reverse().map(entry => <div key={entry.footballer.id}><span>{entry.footballer.position}</span><b>{entry.footballer.name}</b><small>{entry.price}M</small></div>) : <p>No signings yet. Use the targets above to plan your bids.</p>}</div>}
-  </section>;
-});
+function AuctionHistoryModal({ state, onClose }: { state: RoomState; onClose: () => void }) {
+  const close = useBackClosable(true, onClose, "auction-history");
+  return <div className="modal-backdrop auction-overlay" onMouseDown={event => { if (event.target === event.currentTarget) close(); }}><section className="auction-info-modal bid-history-modal"><header><div><span>ACCEPTED BIDS</span><strong>Round {state.roundIndex + 1}</strong></div><button aria-label="Close bid history" onClick={close}>×</button></header><div className="auction-info-body">{state.bidHistory.length === 0 ? <div className="empty-feed">No accepted bids yet.</div> : <div className="compact-history-list">{state.bidHistory.map((bid, index) => <div className={index === 0 ? "latest" : ""} key={bid.id}><span>{bid.managerName}</span><b>{money(bid.amount)}</b><small>{new Date(bid.receivedAt).toLocaleTimeString([], { minute: "2-digit", second: "2-digit" })}</small></div>)}</div>}</div></section></div>;
+}
 
+function MiniSquadModal({ state, managerId, canComplete, completion, onDone, onClose }: { state: RoomState; managerId: string; canComplete: boolean; completion: ReturnType<typeof getSquadCompletion>; onDone: () => void; onClose: () => void }) {
+  const close = useBackClosable(true, onClose, "mini-squad");
+  const me = state.managers.find(manager => manager.id === managerId)!;
+  const starterCount = completion.requiredStarters;
+  const formation = useMemo(() => {
+    const saved = me.formationId ? FORMATION_BY_ID.get(me.formationId) : undefined;
+    return saved?.slots.length === starterCount ? saved : FORMATIONS.find(item => item.slots.length === starterCount)!;
+  }, [me.formationId, starterCount]);
+  const picks = useMemo(() => me.lineup.length
+    ? Object.fromEntries(me.lineup.map(item => [item.slotId, item.footballerId]))
+    : autoArrange(me.squad, formation), [me.lineup, me.squad, formation]);
+  const playerMap = useMemo(() => new Map(me.squad.map(entry => [entry.footballer.id, entry.footballer])), [me.squad]);
+  const starters = new Set(Object.values(picks));
+  const substitutes = me.squad.filter(entry => !starters.has(entry.footballer.id));
+  return <div className="modal-backdrop auction-overlay" onMouseDown={event => { if (event.target === event.currentTarget) close(); }}><section className="auction-info-modal mini-squad-modal"><header><div><span>MY SQUAD</span><strong>{completion.completedStarters}/{completion.requiredStarters} starters · {completion.currentSubstitutes}/{completion.maxSubstitutes} subs</strong></div><button aria-label="Close squad" onClick={close}>×</button></header><div className="auction-info-body"><div className="mini-squad-status"><b>{completion.startersComplete ? "STARTING XI COMPLETE ✓" : `${completion.startersRemaining} STARTER${completion.startersRemaining === 1 ? "" : "S"} STILL NEEDED`}</b><span>Live auction continues while this panel is open.</span></div><div className="mini-pitch">{formation.slots.map(slot => {
+    const player = playerMap.get(picks[slot.id] ?? "");
+    return <div className="mini-pitch-slot" style={{ left: `${slot.x}%`, top: `${slot.y}%` }} key={slot.id}><small>{slot.role}</small>{player ? <><FootballerPhoto player={player} compact /><b>{player.name.split(" ").at(-1)}</b><span>{player.overall}</span></> : <i>+</i>}</div>;
+  })}</div><div className="mini-bench"><div><span>SUBSTITUTES</span><b>{substitutes.length}/{completion.maxSubstitutes}</b></div><div className="mini-bench-row">{substitutes.length ? substitutes.map(entry => <div className="mini-bench-card" key={entry.footballer.id}><FootballerPhoto player={entry.footballer} compact /><b>{entry.footballer.name.split(" ").at(-1)}</b><span>{getFootballerPrimaryRoles(entry.footballer).join("/")}</span></div>) : <small>No substitutes yet.</small>}</div></div>{canComplete && <button className="primary mini-done-button" onClick={onDone}>I'M DONE</button>}</div></section></div>;
+}
 
 function Arena({ socket, state, managerId, setError, leave }: { socket: GameSocket; state: RoomState; managerId: string; setError: (value: string) => void; leave: () => void }) {
   const me = state.managers.find(manager => manager.id === managerId)!;
   const myBudget = me.budget ?? 0;
   const [custom, setCustom] = useState("");
   const [sending, setSending] = useState(false);
+  const [squadOpen, setSquadOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [compactMode, setCompactMode] = useState(() => localStorage.getItem("ae_compact") !== "0");
   const toggleCompactMode = () => setCompactMode(current => {
     const next = !current;
@@ -1106,11 +1125,13 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
     if (previousRound.current !== state.roundIndex) {
       setSending(false);
       setCustom("");
+      setHistoryOpen(false);
       previousRound.current = state.roundIndex;
     }
   }, [state.roundIndex]);
   const openingBid = getOpeningBid(state.settings, state.currentFootballer);
   const minimum = state.currentBid === 0 ? openingBid : state.currentBid + state.settings.bidIncrement;
+  const plannedBid = custom ? Math.max(minimum, +custom || minimum) : minimum;
   const completion = getSquadCompletion(me.squad, state.settings);
   const maximumSquadSize = completion.maxSquadSize;
   const starterCount = completion.requiredStarters;
@@ -1141,6 +1162,7 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
     socket.emit("auction:complete", { code: state.code }, response => {
       setSending(false);
       if (!response.ok) setError(response.error);
+      else setSquadOpen(false);
     });
   };
   const actualBid = (amount: number) => {
@@ -1152,13 +1174,32 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
       else setCustom("");
     });
   };
+  const setBidDelta = (delta: number) => {
+    const next = Math.max(minimum, Math.min(myBudget, plannedBid + delta));
+    setCustom(String(next));
+  };
   const quitSolo = () => leave();
   if (state.phase === "round_result") return <RoundResult state={state} />;
-  return <main className={`arena page ${compactMode ? "compact-mode" : "comfortable-mode"}`}><div className="arena-top"><div><span>ROOM {state.code}</span><b>ROUND {state.roundIndex + 1}/{state.totalRounds}</b></div><div className="arena-controls"><div className="live"><i /> LIVE AUCTION</div><div className="secure-badge" title="Budgets and bids are validated by the server">🔒 SERVER SECURE</div><button type="button" onClick={enterFullscreen}>⛶ {isFullscreen ? "EXIT FULLSCREEN" : "FULLSCREEN"}</button><button type="button" onClick={toggleCompactMode}>{compactMode ? "COMFORT" : "COMPACT"}</button><button aria-label="Send fire reaction" onClick={() => socket.emit("room:reaction", { code: state.code, reaction: "🔥" })}>🔥</button>{state.isSolo && <button className="quit-match" onClick={quitSolo}>QUIT MATCH</button>}</div></div>
-    <div className="arena-grid"><div className="arena-left-stack"><SquadTracker squad={me.squad} currentPosition={state.currentFootballer?.position} squadSize={state.settings.squadSize} substituteCount={state.settings.substituteCount} /><aside className="panel manager-board"><h3>ROOM SQUADS</h3>{state.managers.map(manager => <div className={`manager-line ${manager.id === state.highestBidderId ? "leading" : ""} ${manager.id === managerId ? "you" : ""}`} key={manager.id}><span className="mini-avatar">{manager.avatar}</span><div><b>{manager.name}</b><small>{manager.auctionComplete ? "DONE ✓" : `${getSquadCompletion(manager.squad, state.settings).completedStarters}/${starterCount} starters · ${manager.squad.length}/${maximumSquadSize} squad`}</small></div><strong className={manager.id === managerId ? "own-budget" : "private-budget"}>{manager.id === managerId ? money(myBudget) : "PRIVATE"}</strong></div>)}</aside></div>
-      <section className="auction-stage">{state.currentFootballer && <PlayerCard player={state.currentFootballer} iconSurprise={state.settings.playerPoolMode === "mixed" && state.settings.iconSurprise} />}<div className="auction-meta"><AuctionTimer endsAt={state.endsAt} durationSeconds={state.settings.auctionSeconds} /><div className="current-price"><span>{state.currentBid ? "CURRENT BID" : state.settings.pricingMode === "ovr_scaled" ? "OVR OPENING PRICE" : "OPENING BID"}</span><strong>{money(state.currentBid || openingBid)}</strong><p>{state.highestBidderId ? `${state.managers.find(manager => manager.id === state.highestBidderId)?.name} leads` : state.settings.pricingMode === "ovr_scaled" ? `${state.currentFootballer?.overall ?? "—"} OVR value mode` : "Normal price mode"}</p></div></div></section>
-      <aside className="panel bid-feed"><h3>BID FEED</h3>{state.bidHistory.length === 0 ? <div className="empty-feed">No bids yet.<br />Make the first move.</div> : state.bidHistory.map((bid, index) => <div className={`feed-row ${index === 0 ? "latest" : ""}`} key={bid.id}><span>{bid.managerName}</span><b>{money(bid.amount)}</b></div>)}</aside></div>
-    <div className="bid-dock"><div className="budget-read"><span>YOUR BUDGET</span><b>{money(myBudget)}</b><small>STARTERS {completion.completedStarters}/{completion.requiredStarters} · SUBS {completion.currentSubstitutes}/{completion.maxSubstitutes} · {completion.squadFull ? "SQUAD FULL" : `${Math.max(0, maximumSquadSize - me.squad.length)} squad spots open`}</small></div><div className="quick-bids"><button disabled={cannotBid} onClick={() => actualBid(minimum)}>BID {money(minimum)}</button><button disabled={cannotBid || myBudget < minimum + 5} onClick={() => actualBid(minimum + 5)}>+5M</button><button disabled={cannotBid || myBudget < minimum + 10} onClick={() => actualBid(minimum + 10)}>+10M</button><button type="button" className={`pass-player ${hasPassed ? "passed" : ""}`} disabled={sending || me.auctionComplete || hasPassed || !state.endsAt || completion.squadFull || myBudget < openingBid} onClick={passOnPlayer}>{hasPassed ? "PASSED · WAITING" : "PASS PLAYER"}</button><div className="done-control"><button type="button" className={`complete-auction ${me.auctionComplete ? "done" : ""}`} disabled={sending || !canComplete} onClick={completeSquad}>{me.auctionComplete ? "DONE ✓" : "I'M DONE"}</button><small className={completion.startersComplete ? "ready" : "locked"}>{doneHint}</small></div></div><form className="custom-bid" onSubmit={event => { event.preventDefault(); if (custom) actualBid(+custom); }}><input inputMode="numeric" enterKeyHint="send" aria-label="Custom bid amount" value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ""))} placeholder="CUSTOM BID" /><button type="submit" disabled={cannotBid || !custom || +custom > myBudget}>PLACE</button></form></div></main>;
+  const leader = state.highestBidderId ? state.managers.find(manager => manager.id === state.highestBidderId) : null;
+  return <main className={`arena page ${compactMode ? "compact-mode" : "comfortable-mode"} mobile-comfort-arena`}>
+    <div className="arena-top compact-auction-top"><div><span>ROOM {state.code}</span><b>ROUND {state.roundIndex + 1}/{state.totalRounds}</b></div><div className="auction-top-actions"><AuctionTimer endsAt={state.endsAt} durationSeconds={state.settings.auctionSeconds} /><button type="button" className="squad-quick-button" onClick={() => setSquadOpen(true)}>👥 <b>{completion.completedStarters}/{starterCount}</b></button><button type="button" className="history-quick-button" onClick={() => setHistoryOpen(true)} aria-label="Open accepted bid history">↺</button></div><div className="arena-controls"><div className="live"><i /> LIVE AUCTION</div><button type="button" onClick={enterFullscreen}>⛶ {isFullscreen ? "EXIT" : "FULL"}</button><button type="button" onClick={toggleCompactMode}>{compactMode ? "COMFORT" : "COMPACT"}</button><button aria-label="Send fire reaction" onClick={() => socket.emit("room:reaction", { code: state.code, reaction: "🔥" })}>🔥</button>{state.isSolo && <button className="quit-match" onClick={quitSolo}>QUIT</button>}</div></div>
+    <div className="arena-grid compact-auction-grid">
+      <aside className="panel manager-board compact-manager-board"><h3>MANAGERS</h3>{state.managers.map(manager => {
+        const managerCompletion = getSquadCompletion(manager.squad, state.settings);
+        const status = manager.aiTakeover ? "AI CONTROL · LEGENDARY" : !manager.connected && manager.reconnectDeadline ? "RECONNECTING…" : manager.auctionComplete ? "DONE ✓" : manager.isBot ? "AI MANAGER" : `${managerCompletion.completedStarters}/${starterCount} starters`;
+        return <div className={`manager-line ${manager.id === state.highestBidderId ? "leading" : ""} ${manager.id === managerId ? "you" : ""}`} key={manager.id}><span className="mini-avatar">{manager.avatar}</span><div><b>{manager.name}</b><small>{status}</small></div><strong className={manager.id === managerId ? "own-budget" : "private-budget"}>{manager.id === managerId ? money(myBudget) : "PRIVATE"}</strong></div>;
+      })}</aside>
+      <section className="auction-stage compact-auction-stage">{state.currentFootballer && <PlayerCard player={state.currentFootballer} compactAuction iconSurprise={state.settings.playerPoolMode === "mixed" && state.settings.iconSurprise} onDetails={() => setDetailsOpen(true)} />}<div className="compact-live-info"><div className="current-price compact-current-price"><span>{state.currentBid ? "CURRENT HIGHEST BID" : "OPENING BID"}</span><strong>{money(state.currentBid || openingBid)}</strong><p>{leader ? leader.name : "No accepted bid yet"}</p></div><div className="own-money-chip"><span>YOUR MONEY</span><b>{money(myBudget)}</b><small>STARTERS {completion.completedStarters}/{completion.requiredStarters} · SUBS {completion.currentSubstitutes}/{completion.maxSubstitutes}</small></div></div></section>
+    </div>
+    <form className="bid-dock compact-bid-dock" onSubmit={event => { event.preventDefault(); if (!cannotBid && plannedBid <= myBudget) actualBid(plannedBid); }}>
+      <div className="compact-bid-adjust"><button type="button" disabled={cannotBid || plannedBid <= minimum} onClick={() => setBidDelta(-5)}>−5M</button><input inputMode="numeric" enterKeyHint="send" aria-label="Bid amount" value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ""))} placeholder={String(minimum)} /><button type="button" disabled={cannotBid || plannedBid + 5 > myBudget} onClick={() => setBidDelta(5)}>+5M</button></div>
+      <div className="compact-bid-actions"><button className="primary" type="submit" disabled={cannotBid || plannedBid > myBudget}>BID {money(plannedBid)}</button><button type="button" className={`pass-player ${hasPassed ? "passed" : ""}`} disabled={sending || me.auctionComplete || hasPassed || !state.endsAt || completion.squadFull || myBudget < openingBid} onClick={passOnPlayer}>{hasPassed ? "PASSED" : "PASS"}</button><button type="button" className={`complete-auction ${me.auctionComplete ? "done" : ""}`} disabled={sending || !canComplete} onClick={completeSquad}>{me.auctionComplete ? "DONE ✓" : "I'M DONE"}</button></div>
+      <div className="compact-bid-options"><button type="button" disabled={cannotBid || plannedBid + state.settings.bidIncrement > myBudget} onClick={() => setBidDelta(state.settings.bidIncrement)}>+{state.settings.bidIncrement}M</button><button type="button" disabled={cannotBid || plannedBid + 10 > myBudget} onClick={() => setBidDelta(10)}>+10M</button><small className={completion.startersComplete ? "ready" : "locked"}>{doneHint}</small></div>
+    </form>
+    {squadOpen && <MiniSquadModal state={state} managerId={managerId} canComplete={canComplete} completion={completion} onDone={completeSquad} onClose={() => setSquadOpen(false)} />}
+    {historyOpen && <AuctionHistoryModal state={state} onClose={() => setHistoryOpen(false)} />}
+    {detailsOpen && state.currentFootballer && <PlayerDetailsModal player={state.currentFootballer} onClose={() => setDetailsOpen(false)} />}
+  </main>;
 }
 
 function RoundResult({ state }: { state: RoomState }) {

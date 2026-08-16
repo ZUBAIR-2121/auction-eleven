@@ -7,6 +7,9 @@ import {
   FORMATIONS,
   FORMATION_BY_ID,
   getOpeningBid,
+  getMinimumNextBid,
+  isValidBidIncrement,
+  normalizeBidAmount,
   getConfiguredSquadSize,
   getMinimumFootballersRequired,
   getSquadCompletion,
@@ -18,12 +21,16 @@ import {
   getRoleFitLabel,
   type AuctionPoolSizeMode,
   type AuctionStatePatch,
+  type BlindClueLevel,
+  type BlindDifficulty,
+  type BlindNoGuessMode,
   type BotDifficulty,
   type ClientToServerEvents,
   type Footballer,
   type FootballerPhoto,
   type FormationDefinition,
   type GameSettings,
+  type GameMode,
   type IconFrequency,
   type LineupRole,
   type ManagerLimit,
@@ -806,7 +813,7 @@ function RoomDirectory({ socket, managerName, saveSeat, setError, onClose }: { s
           const full = room.openSlots < 1;
           return <article className={`directory-room ${full ? "full" : ""}`} key={room.code}>
             <div className="directory-room-icon">{room.hasPassword ? "◆" : "◎"}</div>
-            <div className="directory-room-main"><div><strong>{room.hostName}'s room</strong><span className={room.hasPassword ? "locked" : "open"}>{room.hasPassword ? "PASSWORD" : "OPEN"}</span></div><small>Code {room.code} · {getStartingLineupSize(room.squadSize)} starters + {room.substituteCount} subs · {room.auctionSeconds}s rounds</small><div className="directory-room-tags"><span>{room.pricingMode === "ovr_scaled" ? "OVR PRICING" : "NORMAL PRICING"}</span><span>{room.playerPoolMode === "mixed" ? "GENERATIONS" : room.playerPoolMode === "icons" ? "ICONS" : room.playerPoolMode === "custom" ? "CUSTOM POOL" : "CURRENT"}</span><span>{room.managerLimit} MANAGER ROOM</span></div></div>
+            <div className="directory-room-main"><div><strong>{room.hostName}'s room</strong><span className={room.hasPassword ? "locked" : "open"}>{room.hasPassword ? "PASSWORD" : "OPEN"}</span></div><small>Code {room.code} · {getStartingLineupSize(room.squadSize)} starters + {room.substituteCount} subs · {room.auctionSeconds}s rounds</small><div className="directory-room-tags"><span>{room.gameMode === "blind" ? "BLIND AUCTION" : "NORMAL AUCTION"}</span><span>{room.pricingMode === "ovr_scaled" ? "OVR PRICING" : "NORMAL PRICING"}</span><span>{room.playerPoolMode === "mixed" ? "GENERATIONS" : room.playerPoolMode === "icons" ? "ICONS" : room.playerPoolMode === "custom" ? "CUSTOM POOL" : "CURRENT"}</span><span>{room.managerLimit} MANAGER ROOM</span></div></div>
             <div className="directory-occupancy"><div><b>{room.managerCount}</b><span>/{room.managerLimit}</span></div><small>{full ? "ROOM FULL" : `${room.openSlots} OPEN`}</small></div>
             <button className="directory-join" disabled={full || joiningCode === room.code} onClick={() => join(room)}>{full ? "FULL" : joiningCode === room.code ? "JOINING…" : room.hasPassword ? "ENTER PASSWORD" : "JOIN ROOM"}</button>
           </article>;
@@ -851,6 +858,11 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
   const changeAuctionPoolCustomCount = (auctionPoolCustomCount: number) => updateSettings({ auctionPoolCustomCount });
   const changeIconFrequency = (iconFrequency: IconFrequency) => updateSettings({ iconFrequency });
   const changeIconSurprise = (iconSurprise: boolean) => updateSettings({ iconSurprise });
+  const changeGameMode = (gameMode: GameMode) => updateSettings({ gameMode });
+  const changeBlindTimer = (blindRevealSeconds: 10 | 15 | 20 | 30) => updateSettings({ blindRevealSeconds });
+  const changeBlindDifficulty = (blindDifficulty: BlindDifficulty) => updateSettings({ blindDifficulty });
+  const changeBlindClues = (blindClues: BlindClueLevel) => updateSettings({ blindClues });
+  const changeBlindNoGuess = (blindNoGuess: BlindNoGuessMode) => updateSettings({ blindNoGuess });
   const autoBuildPool = () => socket.emit("room:autoBuildPlayerPool", { code: state.code }, response => { if (!response.ok) setError(response.error); });
   const changeRoomAccess = (access: RoomAccess) => {
     if (access === "password" && !state.hasPassword && roomPassword.trim().length < 4) {
@@ -876,6 +888,8 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
         <Setting label="Auction timer" value={`${state.settings.auctionSeconds}s`}><input disabled={!isHost} type="range" min="10" max="30" step="1" value={state.settings.auctionSeconds} onChange={event => changeNumber("auctionSeconds", +event.target.value)} /></Setting>
         <Setting label="Formation time limit" value={`${Math.round(state.settings.formationSeconds / 60)} min`}><input disabled={!isHost} type="range" min="120" max="600" step="60" value={state.settings.formationSeconds} onChange={event => changeNumber("formationSeconds", +event.target.value)} /></Setting>
         {!state.isSolo && <div className="manager-limit-setting room-access-setting"><div><span>ROOM ACCESS</span><b>{state.access === "password" ? "PASSWORD" : "OPEN"}</b></div><div className="preset-buttons pricing-mode-buttons"><button disabled={!isHost} className={state.access === "public" ? "active" : ""} onClick={() => changeRoomAccess("public")}><strong>Open room</strong><small>Visible in Find Room and joins instantly.</small></button><button disabled={!isHost} className={state.access === "password" ? "active" : ""} onClick={() => changeRoomAccess("password")}><strong>Password room</strong><small>Visible in Find Room but locked.</small></button></div>{isHost && <div className="lobby-password-row"><input type="password" maxLength={32} value={roomPassword} onChange={event => setRoomPassword(event.target.value)} placeholder={state.hasPassword ? "Enter a new password to replace it" : "Set password (4–32 characters)"} /><button disabled={roomPassword.trim().length < 4} onClick={() => changeRoomAccess("password")}>{state.hasPassword ? "UPDATE PASSWORD" : "SET PASSWORD"}</button></div>}<small>{state.hasPassword ? "A password is active. It is never sent to other players or shown in the room directory." : "Open rooms can be joined without a password."}</small></div>}
+        <div className="manager-limit-setting game-mode-setting"><div><span>GAME MODE</span><b>{state.settings.gameMode === "blind" ? "BLIND AUCTION" : "NORMAL AUCTION"}</b></div><div className="preset-buttons game-mode-buttons"><button disabled={!isHost} className={state.settings.gameMode === "normal" ? "active" : ""} onClick={() => changeGameMode("normal")}><strong>Normal Auction</strong><small>Classic budget bidding.</small></button><button disabled={!isHost} className={state.settings.gameMode === "blind" ? "active blind" : "blind"} onClick={() => changeGameMode("blind")}><strong>Blind Auction</strong><small>First correct player guess wins.</small></button></div>{state.settings.gameMode === "blind" && <div className="blind-room-options"><div><span>REVEAL TIMER</span><div className="inline-choice">{([10,15,20,30] as const).map(value => <button disabled={!isHost} className={state.settings.blindRevealSeconds === value ? "active" : ""} onClick={() => changeBlindTimer(value)} key={value}>{value}s</button>)}</div></div><div><span>DIFFICULTY</span><div className="inline-choice">{(["easy","normal","hard"] as BlindDifficulty[]).map(value => <button disabled={!isHost} className={state.settings.blindDifficulty === value ? "active" : ""} onClick={() => changeBlindDifficulty(value)} key={value}>{value.toUpperCase()}</button>)}</div></div><div><span>CLUES</span><div className="inline-choice">{(["off","light","normal","more"] as BlindClueLevel[]).map(value => <button disabled={!isHost} className={state.settings.blindClues === value ? "active" : ""} onClick={() => changeBlindClues(value)} key={value}>{value.toUpperCase()}</button>)}</div></div><div><span>IF NOBODY GUESSES</span><div className="inline-choice"><button disabled={!isHost} className={state.settings.blindNoGuess === "quick_auction" ? "active" : ""} onClick={() => changeBlindNoGuess("quick_auction")}>QUICK AUCTION</button><button disabled={!isHost} className={state.settings.blindNoGuess === "skip" ? "active" : ""} onClick={() => changeBlindNoGuess("skip")}>SKIP</button></div></div><small>Answers are checked by the server. Hidden names and clear image URLs are not sent before reveal.</small></div>}</div>
+
         <div className="manager-limit-setting pricing-mode-setting"><div><span>PLAYER STARTING PRICES</span><b>{state.settings.pricingMode === "ovr_scaled" ? "OVR PRICING" : "NORMAL"}</b></div><div className="preset-buttons pricing-mode-buttons">{PRICING_MODES.map(mode => <button disabled={!isHost} className={state.settings.pricingMode === mode.id ? "active" : ""} onClick={() => changePricingMode(mode.id)} key={mode.id}><strong>{mode.title}</strong><small>{mode.description}</small></button>)}</div><small>{state.settings.pricingMode === "ovr_scaled" ? "The opening bid uses each player's OVR and market value, scaled to the room budget." : "Classic mode keeps the same opening bid for every footballer."}</small></div>
 
         <div className="manager-limit-setting player-pool-setting"><div><span>PLAYER POOL</span><b>{poolModeLabel}</b></div><div className="player-pool-mode-grid">
@@ -897,11 +911,11 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
 
         <div className={`pool-summary ${state.poolSelectionValid ? "valid" : "invalid"}`}><div><span>SELECTED AUCTION POOL</span><strong>{validation.selected} / {validation.required} minimum</strong></div><div className="pool-type-counts"><span>CURRENT <b>{validation.selectedCurrent}</b></span><span>ICONS <b>{validation.selectedIcons}</b></span><span>TARGET <b>{validation.target}</b></span><span>ELIGIBLE <b>{validation.eligibleAvailable}</b></span></div><div className="pool-counts">{POSITIONS.map(position => <span key={position}>{position} <b>{counts[position]}</b></span>)}</div><div className="pool-actions"><button onClick={() => setPoolOpen(true)}>{isHost && state.settings.playerPoolMode === "custom" ? "CUSTOMIZE PLAYERS" : "VIEW PLAYERS"}</button>{isHost && <button className="auto-pool" onClick={autoBuildPool}>{state.settings.playerPoolMode === "custom" ? "RANDOM BALANCED" : "REBUILD BALANCED POOL"}</button>}</div></div>
 
-        <div className="prematch-summary"><div className="setting-heading"><span>AUCTION SETTINGS</span><b>READY CHECK</b></div><div className="summary-grid"><span>Managers<b>{state.managers.length}</b></span><span>Starters<b>{starterCount}</b></span><span>Max subs<b>{substituteCount}</b></span><span>Squad<b>{totalSquadSize}</b></span><span>Player pool<b>{poolModeLabel}</b></span><span>Eligible<b>{validation.eligibleAvailable}</b></span><span>Auction queue<b>{validation.selected}</b></span><span>Minimum<b>{validation.required}</b></span><span>Pool size<b>{poolSizeLabel}</b></span><span>Timer<b>{state.settings.auctionSeconds}s</b></span><span>Budget<b>{state.settings.startingBudget}M</b></span><span>Opponent budgets<b>PRIVATE</b></span>{state.settings.playerPoolMode === "mixed" && <span>Icons<b>{state.settings.iconFrequency.toUpperCase()}</b></span>}</div></div>
+        <div className="prematch-summary"><div className="setting-heading"><span>AUCTION SETTINGS</span><b>READY CHECK</b></div><div className="summary-grid"><span>Game mode<b>{state.settings.gameMode === "blind" ? "BLIND" : "NORMAL"}</b></span>{state.settings.gameMode === "blind" && <><span>Reveal<b>{state.settings.blindRevealSeconds}s</b></span><span>Clues<b>{state.settings.blindClues.toUpperCase()}</b></span><span>No guess<b>{state.settings.blindNoGuess === "quick_auction" ? "QUICK AUCTION" : "SKIP"}</b></span></>}<span>Managers<b>{state.managers.length}</b></span><span>Starters<b>{starterCount}</b></span><span>Max subs<b>{substituteCount}</b></span><span>Squad<b>{totalSquadSize}</b></span><span>Player pool<b>{poolModeLabel}</b></span><span>Eligible<b>{validation.eligibleAvailable}</b></span><span>Auction queue<b>{validation.selected}</b></span><span>Minimum<b>{validation.required}</b></span><span>Pool size<b>{poolSizeLabel}</b></span><span>Timer<b>{state.settings.auctionSeconds}s</b></span><span>Budget<b>{state.settings.startingBudget}M</b></span><span>Opponent budgets<b>PRIVATE</b></span>{state.settings.playerPoolMode === "mixed" && <span>Icons<b>{state.settings.iconFrequency.toUpperCase()}</b></span>}</div></div>
 
         {(validation.errors.length > 0 || validation.warnings.length > 0) && <div className="pool-validation-list">{validation.errors.map(message => <p className="error" key={message}>✕ {message}</p>)}{validation.warnings.map(message => <p className="warning" key={message}>! {message}</p>)}</div>}
         <div className="capacity-meter unique"><span>{state.poolSelectionValid ? "Auction pool ready" : "Player pool needs attention"}</span><b>{validation.selected} selected / {validation.required} minimum</b><small>{state.managers.length} manager{state.managers.length === 1 ? "" : "s"} × ({starterCount} starters + {substituteCount} subs) = {validation.required} minimum unique footballers. The recommended pool adds variety while preserving positional coverage.</small></div>
-        <div className="lobby-actions"><button className={me.ready ? "secondary" : "primary"} onClick={toggleReady}>{me.ready ? "Not Ready" : "I’m Ready"}</button>{isHost && <button className="kickoff" disabled={startDisabled} onClick={start}>START AUCTION ↗</button>}<button className="text-btn" onClick={leave}>← Back to menu</button></div>
+        <div className="lobby-actions"><button className={me.ready ? "secondary" : "primary"} onClick={toggleReady}>{me.ready ? "Not Ready" : "I’m Ready"}</button>{isHost && <button className="kickoff" disabled={startDisabled} onClick={start}>{state.settings.gameMode === "blind" ? "START BLIND AUCTION ↗" : "START AUCTION ↗"}</button>}<button className="text-btn" onClick={leave}>← Back to menu</button></div>
       </section></div>
     {poolOpen && <PlayerPoolModal socket={socket} state={state} isHost={isHost} onClose={closePool} setError={setError} />}
   </main>;
@@ -1094,6 +1108,53 @@ function MiniSquadModal({ state, managerId, canComplete, completion, onDone, onC
   })}</div><div className="mini-bench"><div><span>SUBSTITUTES</span><b>{substitutes.length}/{completion.maxSubstitutes}</b></div><div className="mini-bench-row">{substitutes.length ? substitutes.map(entry => <div className="mini-bench-card" key={entry.footballer.id}><FootballerPhoto player={entry.footballer} compact /><b>{entry.footballer.name.split(" ").at(-1)}</b><span>{getFootballerPrimaryRoles(entry.footballer).join("/")}</span></div>) : <small>No substitutes yet.</small>}</div></div>{canComplete && <button className="primary mini-done-button" onClick={onDone}>I'M DONE</button>}</div></section></div>;
 }
 
+function BlindArena({ socket, state, managerId, setError, onDone }: { socket: GameSocket; state: RoomState; managerId: string; setError: (value: string) => void; onDone: () => void }) {
+  const blind = state.blindRound!;
+  const me = state.managers.find(manager => manager.id === managerId)!;
+  const completion = getSquadCompletion(me.squad, state.settings);
+  const [guess, setGuess] = useState("");
+  const [feedback, setFeedback] = useState("");
+  const [sending, setSending] = useState(false);
+  const [squadOpen, setSquadOpen] = useState(false);
+  useEffect(() => {
+    setGuess("");
+    setFeedback("");
+    setSending(false);
+  }, [blind.blindRoundId]);
+  const submitGuess = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (sending || blind.status !== "guessing" || !guess.trim() || me.auctionComplete || completion.squadFull) return;
+    setSending(true);
+    socket.emit("blind:guess", { code: state.code, blindRoundId: blind.blindRoundId, requestId: crypto.randomUUID(), guess: guess.trim() }, response => {
+      setSending(false);
+      if (!response.ok) {
+        setError(response.error);
+        return;
+      }
+      setFeedback(response.data.message);
+      if (response.data.result !== "rate_limited") setGuess("");
+    });
+  };
+  const canComplete = completion.canDeclareDone && !me.auctionComplete;
+  const revealed = blind.revealedFootballer;
+  return <main className="arena page blind-arena">
+    <div className="arena-top blind-top"><div><span>ROOM {state.code}</span><b>BLIND ROUND {state.roundIndex + 1}/{state.totalRounds}</b></div><div className="auction-top-actions"><AuctionTimer endsAt={blind.endsAt} durationSeconds={state.settings.blindRevealSeconds} /><button type="button" className="squad-quick-button" onClick={() => setSquadOpen(true)}>👥 <b>{completion.completedStarters}/{completion.requiredStarters}</b></button></div><div className="live"><i /> {blind.status === "guessing" ? "GUESS THE PLAYER" : "FULL REVEAL"}</div></div>
+    <section className="blind-stage-card">
+      <div className={`blind-reveal-frame stage-${blind.revealStage}`}><img src={apiUrl(blind.revealImageUrl)} alt={blind.status === "guessing" ? "Obscured mystery footballer" : revealed?.name ?? "Revealed footballer"} draggable={false} /></div>
+      <div className="blind-stage-meta"><span>REVEAL STAGE</span><b>{blind.revealStage + 1}/6</b></div>
+      {blind.clues.length > 0 && <div className="blind-clues">{blind.clues.map(clue => <span key={clue.label}><small>{clue.label}</small><b>{clue.value}</b></span>)}</div>}
+      {revealed && blind.status !== "guessing" && <div className="blind-revealed-name"><span>IT WAS</span><strong>{revealed.name}</strong><small>{getFootballerPrimaryRoles(revealed).join(" / ")} · {revealed.playerType === "ICON" ? "ICON" : "CURRENT"}</small></div>}
+    </section>
+    <form className="blind-guess-dock" onSubmit={submitGuess}>
+      <label><span>WHO IS THIS PLAYER?</span><input value={guess} onChange={event => setGuess(event.target.value)} disabled={blind.status !== "guessing" || sending || me.auctionComplete || completion.squadFull} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} enterKeyHint="go" maxLength={80} placeholder={me.auctionComplete ? "You are DONE" : "Type a player name…"} /></label>
+      <button className="primary" type="submit" disabled={blind.status !== "guessing" || sending || !guess.trim() || me.auctionComplete || completion.squadFull}>{sending ? "CHECKING…" : "GUESS"}</button>
+      {canComplete && <button type="button" className="complete-auction" onClick={onDone}>I'M DONE</button>}
+      <small className={`blind-feedback ${feedback.startsWith("Correct") ? "correct" : ""}`}>{feedback || (me.auctionComplete ? "You can watch the remaining mystery rounds." : "Aliases, accents and small safe typos are handled by the server.")}</small>
+    </form>
+    {squadOpen && <MiniSquadModal state={state} managerId={managerId} canComplete={canComplete} completion={completion} onDone={onDone} onClose={() => setSquadOpen(false)} />}
+  </main>;
+}
+
 function Arena({ socket, state, managerId, setError, leave }: { socket: GameSocket; state: RoomState; managerId: string; setError: (value: string) => void; leave: () => void }) {
   const me = state.managers.find(manager => manager.id === managerId)!;
   const myBudget = me.budget ?? 0;
@@ -1120,25 +1181,48 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
       else await document.documentElement.requestFullscreen?.();
     } catch { /* fullscreen may not be supported or permitted */ }
   };
-  const previousRound = useRef(state.roundIndex);
+  const previousRound = useRef(state.roundId);
   useEffect(() => {
-    if (previousRound.current !== state.roundIndex) {
+    if (previousRound.current !== state.roundId) {
       setSending(false);
       setCustom("");
       setHistoryOpen(false);
-      previousRound.current = state.roundIndex;
+      previousRound.current = state.roundId;
     }
-  }, [state.roundIndex]);
+  }, [state.roundId]);
+
   const openingBid = getOpeningBid(state.settings, state.currentFootballer);
-  const minimum = state.currentBid === 0 ? openingBid : state.currentBid + state.settings.bidIncrement;
-  const plannedBid = custom ? Math.max(minimum, +custom || minimum) : minimum;
+  const minimum = getMinimumNextBid(state.settings, state.currentBid, state.currentFootballer);
+  const enteredBid = custom === "" ? minimum : Number(custom);
+  const plannedBid = Number.isFinite(enteredBid) ? Math.round(enteredBid) : minimum;
   const completion = getSquadCompletion(me.squad, state.settings);
-  const maximumSquadSize = completion.maxSquadSize;
   const starterCount = completion.requiredStarters;
   const hasPassed = (state.passedManagerIds ?? []).includes(managerId);
+  const roundOpen = state.phase === "auction" && Boolean(state.endsAt);
   const leadingCurrentRound = state.phase === "auction" && state.highestBidderId === managerId;
   const canComplete = completion.canDeclareDone && !me.auctionComplete && !leadingCurrentRound;
-  const cannotBid = sending || me.auctionComplete || hasPassed || !state.endsAt || completion.squadFull || myBudget < minimum;
+  const bidControlsLocked = sending || me.auctionComplete || hasPassed || !roundOpen || completion.squadFull;
+  const amountIsLegal = plannedBid >= minimum && isValidBidIncrement(plannedBid, state.settings);
+  const canBid = !bidControlsLocked && amountIsLegal && plannedBid <= myBudget;
+  const canPass = !sending && roundOpen && !me.auctionComplete && !hasPassed;
+  const insufficientForMinimum = !bidControlsLocked && myBudget < minimum;
+  const invalidManualBid = custom !== "" && !insufficientForMinimum && (!amountIsLegal || plannedBid > myBudget);
+
+  // If another accepted bid raises the minimum while the user is preparing a
+  // manual amount, keep the field from becoming stale. Nothing is submitted
+  // automatically; the player still presses BID.
+  const previousMinimum = useRef(minimum);
+  useEffect(() => {
+    const oldMinimum = previousMinimum.current;
+    if (minimum > oldMinimum && custom !== "") {
+      const current = Number(custom);
+      if (!Number.isFinite(current) || current < minimum || !isValidBidIncrement(current, state.settings)) {
+        setCustom(String(normalizeBidAmount(Math.max(minimum, Number.isFinite(current) ? current : minimum), state.settings, minimum)));
+      }
+    }
+    previousMinimum.current = minimum;
+  }, [minimum, state.settings, custom]);
+
   const doneHint = me.auctionComplete
     ? "You are finished bidding. Watching the remaining auction."
     : !completion.startersComplete
@@ -1147,7 +1231,7 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
         ? "Finish the current auction round before leaving bidding."
         : "Starting lineup complete — keep bidding for optional substitutes/upgrades or finish now.";
   const passOnPlayer = () => {
-    if (hasPassed || !state.endsAt) return;
+    if (!canPass) return;
     setSending(true);
     socket.emit("auction:pass", { code: state.code, roundId: state.roundId, requestId: crypto.randomUUID() }, response => {
       setSending(false);
@@ -1174,27 +1258,45 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
       else setCustom("");
     });
   };
+  const getQuickBid = (delta: number) => {
+    const legalBase = normalizeBidAmount(Math.max(minimum, plannedBid), state.settings, minimum);
+    return normalizeBidAmount(Math.max(minimum, legalBase + delta), state.settings, minimum);
+  };
+  const canUseQuickBid = (delta: number) => !bidControlsLocked && getQuickBid(delta) <= myBudget && getQuickBid(delta) !== plannedBid;
   const setBidDelta = (delta: number) => {
-    const next = Math.max(minimum, Math.min(myBudget, plannedBid + delta));
+    if (bidControlsLocked) return;
+    const next = getQuickBid(delta);
+    if (delta > 0 && next > myBudget) {
+      setError("Not enough money for that quick bid.");
+      return;
+    }
     setCustom(String(next));
   };
   const quitSolo = () => leave();
   if (state.phase === "round_result") return <RoundResult state={state} />;
+  if (state.settings.gameMode === "blind" && state.blindRound && state.blindRound.status !== "quick_auction") {
+    return <BlindArena socket={socket} state={state} managerId={managerId} setError={setError} onDone={completeSquad} />;
+  }
   const leader = state.highestBidderId ? state.managers.find(manager => manager.id === state.highestBidderId) : null;
   return <main className={`arena page ${compactMode ? "compact-mode" : "comfortable-mode"} mobile-comfort-arena`}>
-    <div className="arena-top compact-auction-top"><div><span>ROOM {state.code}</span><b>ROUND {state.roundIndex + 1}/{state.totalRounds}</b></div><div className="auction-top-actions"><AuctionTimer endsAt={state.endsAt} durationSeconds={state.settings.auctionSeconds} /><button type="button" className="squad-quick-button" onClick={() => setSquadOpen(true)}>👥 <b>{completion.completedStarters}/{starterCount}</b></button><button type="button" className="history-quick-button" onClick={() => setHistoryOpen(true)} aria-label="Open accepted bid history">↺</button></div><div className="arena-controls"><div className="live"><i /> LIVE AUCTION</div><button type="button" onClick={enterFullscreen}>⛶ {isFullscreen ? "EXIT" : "FULL"}</button><button type="button" onClick={toggleCompactMode}>{compactMode ? "COMFORT" : "COMPACT"}</button><button aria-label="Send fire reaction" onClick={() => socket.emit("room:reaction", { code: state.code, reaction: "🔥" })}>🔥</button>{state.isSolo && <button className="quit-match" onClick={quitSolo}>QUIT</button>}</div></div>
+    <div className="arena-top compact-auction-top"><div><span>ROOM {state.code}</span><b>ROUND {state.roundIndex + 1}/{state.totalRounds}</b></div><div className="auction-top-actions"><AuctionTimer endsAt={state.endsAt} durationSeconds={state.settings.auctionSeconds} /><button type="button" className="squad-quick-button" onClick={() => setSquadOpen(true)}>👥 <b>{completion.completedStarters}/{starterCount}</b></button><button type="button" className="history-quick-button" onClick={() => setHistoryOpen(true)} aria-label="Open accepted bid history">↺</button></div><div className="arena-controls"><div className="live"><i /> {state.settings.gameMode === "blind" && state.blindRound?.status === "quick_auction" ? "10s QUICK AUCTION" : "LIVE AUCTION"}</div><button type="button" onClick={enterFullscreen}>⛶ {isFullscreen ? "EXIT" : "FULL"}</button><button type="button" onClick={toggleCompactMode}>{compactMode ? "COMFORT" : "COMPACT"}</button><button aria-label="Send fire reaction" onClick={() => socket.emit("room:reaction", { code: state.code, reaction: "🔥" })}>🔥</button>{state.isSolo && <button className="quit-match" onClick={quitSolo}>QUIT</button>}</div></div>
     <div className="arena-grid compact-auction-grid">
       <aside className="panel manager-board compact-manager-board"><h3>MANAGERS</h3>{state.managers.map(manager => {
         const managerCompletion = getSquadCompletion(manager.squad, state.settings);
         const status = manager.aiTakeover ? "AI CONTROL · LEGENDARY" : !manager.connected && manager.reconnectDeadline ? "RECONNECTING…" : manager.auctionComplete ? "DONE ✓" : manager.isBot ? "AI MANAGER" : `${managerCompletion.completedStarters}/${starterCount} starters`;
         return <div className={`manager-line ${manager.id === state.highestBidderId ? "leading" : ""} ${manager.id === managerId ? "you" : ""}`} key={manager.id}><span className="mini-avatar">{manager.avatar}</span><div><b>{manager.name}</b><small>{status}</small></div><strong className={manager.id === managerId ? "own-budget" : "private-budget"}>{manager.id === managerId ? money(myBudget) : "PRIVATE"}</strong></div>;
       })}</aside>
-      <section className="auction-stage compact-auction-stage">{state.currentFootballer && <PlayerCard player={state.currentFootballer} compactAuction iconSurprise={state.settings.playerPoolMode === "mixed" && state.settings.iconSurprise} onDetails={() => setDetailsOpen(true)} />}<div className="compact-live-info"><div className="current-price compact-current-price"><span>{state.currentBid ? "CURRENT HIGHEST BID" : "OPENING BID"}</span><strong>{money(state.currentBid || openingBid)}</strong><p>{leader ? leader.name : "No accepted bid yet"}</p></div><div className="own-money-chip"><span>YOUR MONEY</span><b>{money(myBudget)}</b><small>STARTERS {completion.completedStarters}/{completion.requiredStarters} · SUBS {completion.currentSubstitutes}/{completion.maxSubstitutes}</small></div></div></section>
+      <section className="auction-stage compact-auction-stage">{state.currentFootballer && <PlayerCard player={state.currentFootballer} compactAuction iconSurprise={state.settings.playerPoolMode === "mixed" && state.settings.iconSurprise} onDetails={() => setDetailsOpen(true)} />}<div className="compact-live-info"><div className="current-price compact-current-price"><span>{state.currentBid ? "CURRENT HIGHEST BID" : "OPENING BID"}</span><strong>{money(state.currentBid || openingBid)}</strong><p>{leader ? leader.name : "No accepted bid yet"}</p></div><div className="own-money-chip"><span>YOUR MONEY</span><b>{money(myBudget)}</b><small>STARTERS {completion.completedStarters}/{completion.requiredStarters} · SUBS {completion.currentSubstitutes}/{completion.maxSubstitutes}</small>{insufficientForMinimum && <em>Not enough money for the next bid — PASS is still available.</em>}{invalidManualBid && <em>Enter a legal bid within your budget using {state.settings.bidIncrement}M increments.</em>}</div></div></section>
     </div>
-    <form className="bid-dock compact-bid-dock" onSubmit={event => { event.preventDefault(); if (!cannotBid && plannedBid <= myBudget) actualBid(plannedBid); }}>
-      <div className="compact-bid-adjust"><button type="button" disabled={cannotBid || plannedBid <= minimum} onClick={() => setBidDelta(-5)}>−5M</button><input inputMode="numeric" enterKeyHint="send" aria-label="Bid amount" value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ""))} placeholder={String(minimum)} /><button type="button" disabled={cannotBid || plannedBid + 5 > myBudget} onClick={() => setBidDelta(5)}>+5M</button></div>
-      <div className="compact-bid-actions"><button className="primary" type="submit" disabled={cannotBid || plannedBid > myBudget}>BID {money(plannedBid)}</button><button type="button" className={`pass-player ${hasPassed ? "passed" : ""}`} disabled={sending || me.auctionComplete || hasPassed || !state.endsAt || completion.squadFull || myBudget < openingBid} onClick={passOnPlayer}>{hasPassed ? "PASSED" : "PASS"}</button><button type="button" className={`complete-auction ${me.auctionComplete ? "done" : ""}`} disabled={sending || !canComplete} onClick={completeSquad}>{me.auctionComplete ? "DONE ✓" : "I'M DONE"}</button></div>
-      <div className="compact-bid-options"><button type="button" disabled={cannotBid || plannedBid + state.settings.bidIncrement > myBudget} onClick={() => setBidDelta(state.settings.bidIncrement)}>+{state.settings.bidIncrement}M</button><button type="button" disabled={cannotBid || plannedBid + 10 > myBudget} onClick={() => setBidDelta(10)}>+10M</button><small className={completion.startersComplete ? "ready" : "locked"}>{doneHint}</small></div>
+    <form className="bid-dock compact-bid-dock" onSubmit={event => { event.preventDefault(); if (canBid) actualBid(plannedBid); }}>
+      <div className="compact-bid-adjust">
+        <input inputMode="numeric" enterKeyHint="send" aria-label="Bid amount in millions" value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ""))} placeholder={String(minimum)} />
+        <button type="button" disabled={bidControlsLocked || getQuickBid(-5) >= plannedBid} onClick={() => setBidDelta(-5)}>−5M</button>
+        <button type="button" disabled={!canUseQuickBid(5)} onClick={() => setBidDelta(5)}>+5M</button>
+        <button type="button" disabled={!canUseQuickBid(10)} onClick={() => setBidDelta(10)}>+10M</button>
+      </div>
+      <div className="compact-bid-actions"><button className="primary" type="submit" disabled={!canBid}>BID {money(plannedBid)}</button><button type="button" className={`pass-player ${hasPassed ? "passed" : ""}`} disabled={!canPass} onClick={passOnPlayer}>{hasPassed ? "PASSED" : "PASS"}</button><button type="button" className={`complete-auction ${me.auctionComplete ? "done" : ""}`} disabled={sending || !canComplete} onClick={completeSquad}>{me.auctionComplete ? "DONE ✓" : "I'M DONE"}</button></div>
+      <div className="compact-bid-options"><button type="button" disabled={!canUseQuickBid(state.settings.bidIncrement)} onClick={() => setBidDelta(state.settings.bidIncrement)}>+{state.settings.bidIncrement}M</button><small className={completion.startersComplete ? "ready" : "locked"}>{doneHint}</small></div>
     </form>
     {squadOpen && <MiniSquadModal state={state} managerId={managerId} canComplete={canComplete} completion={completion} onDone={completeSquad} onClose={() => setSquadOpen(false)} />}
     {historyOpen && <AuctionHistoryModal state={state} onClose={() => setHistoryOpen(false)} />}
@@ -1203,8 +1305,10 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
 }
 
 function RoundResult({ state }: { state: RoomState }) {
-  const label = state.lastWinner?.automatic ? "AUTO SIGNED" : state.lastWinner ? "SOLD!" : state.settings.reauctionUnsold ? "UNSOLD · LATER ROUND" : "SKIPPED";
-  return <main className="round-result"><div className="result-burst">{label}</div>{state.lastWinner ? <><div className="winner-avatar">{state.lastWinner.automatic ? "⚙️" : "🏆"}</div><h1>{state.lastWinner.footballerName}</h1><p>{state.lastWinner.automatic ? "assigned to complete the squad of" : "joins"} <strong>{state.lastWinner.managerName}</strong></p><div className="sold-price">{money(state.lastWinner.amount)}</div></> : <><h1>No manager bid</h1><p>{state.settings.reauctionUnsold ? "This footballer may return after the normal auction pool ends." : "This footballer is removed from this match."}</p></>}<div className="loading-bar"><i /></div></main>;
+  const blindWinner = Boolean(state.lastWinner?.blind);
+  const revealedBlind = state.settings.gameMode === "blind" ? state.blindRound?.revealedFootballer : null;
+  const label = blindWinner ? "FIRST CORRECT GUESS" : state.lastWinner?.automatic ? "AUTO SIGNED" : state.lastWinner ? "SOLD!" : state.settings.gameMode === "blind" ? "FULL REVEAL" : state.settings.reauctionUnsold ? "UNSOLD · LATER ROUND" : "SKIPPED";
+  return <main className="round-result"><div className="result-burst">{label}</div>{state.lastWinner ? <><div className="winner-avatar">{blindWinner ? "👁" : state.lastWinner.automatic ? "⚙️" : "🏆"}</div><h1>{state.lastWinner.footballerName}</h1><p>{blindWinner ? <><strong>{state.lastWinner.managerName}</strong> guessed first{state.lastWinner.guessedAtMs !== undefined ? ` in ${(state.lastWinner.guessedAtMs / 1000).toFixed(2)}s` : ""}.</> : <>{state.lastWinner.automatic ? "assigned to complete the squad of" : "joins"} <strong>{state.lastWinner.managerName}</strong></>}</p>{!blindWinner && <div className="sold-price">{money(state.lastWinner.amount)}</div>}</> : revealedBlind ? <><div className="winner-avatar">👁</div><h1>{revealedBlind.name}</h1><p>Nobody guessed correctly. {state.settings.blindNoGuess === "quick_auction" ? "A quick auction follows." : "This footballer is skipped."}</p></> : <><h1>No manager bid</h1><p>{state.settings.reauctionUnsold ? "This footballer may return after the normal auction pool ends." : "This footballer is removed from this match."}</p></>}<div className="loading-bar"><i /></div></main>;
 }
 
 function rolePosition(role: LineupRole): Position {

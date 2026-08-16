@@ -7,6 +7,7 @@ import { Server } from "socket.io";
 import type { ClientToServerEvents, ServerToClientEvents } from "@auction-eleven/shared";
 import { FOOTBALLERS, FOOTBALLER_BY_ID } from "./footballers.js";
 import { getFootballerPhoto } from "./photoResolver.js";
+import { renderBlindRevealStage } from "./blindReveal.js";
 import { RoomManager } from "./roomManager.js";
 
 const PORT=Number(process.env.PORT ?? 4000);
@@ -37,6 +38,19 @@ const rooms=new RoomManager(
   ()=>io.emit("rooms:changed"),
   (code,patch)=>io.to(code).emit("room:auctionPatch",patch)
 );
+
+app.get("/api/blind-stage/:token/:stage.webp",async(req,res)=>{
+  const stage=Number(req.params.stage);
+  if(!Number.isInteger(stage)||stage<0||stage>5){res.status(400).json({error:"Invalid reveal stage."});return;}
+  try{
+    const player=rooms.getBlindRevealFootballer(req.params.token,stage);
+    const image=await renderBlindRevealStage(player,stage);
+    res.set("Cache-Control","private, no-store");
+    res.type(image.contentType).send(image.buffer);
+  }catch(error){
+    res.status(404).json({error:error instanceof Error?error.message:"Reveal image is unavailable."});
+  }
+});
 
 const safeAck=(ack:Function,fn:()=>unknown)=>{
   try{ack({ok:true,data:fn()})}
@@ -71,6 +85,7 @@ io.on("connection",socket=>{
   socket.on("auction:bid",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.bid(payload.code,seat,payload.amount,payload.requestId,payload.roundId);return null;}));
   socket.on("auction:pass",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.pass(payload.code,seat,payload.requestId,payload.roundId);return null;}));
   socket.on("auction:complete",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.completeAuction(payload.code,seat);return null;}));
+  socket.on("blind:guess",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);return rooms.submitBlindGuess(payload.code,seat,payload.requestId,payload.blindRoundId,payload.guess);}));
   socket.on("lineup:submit",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.submitLineup(payload.code,seat,payload.formationId,payload.picks);return null;}));
   socket.on("room:reaction",payload=>{try{const seat=ensureSeat(payload.code);rooms.reaction(payload.code,seat,payload.reaction);}catch{/* ignore stale/invalid reaction events */}});
   socket.on("chat:send",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.sendChat(payload.code,seat,payload.text);return null;}));

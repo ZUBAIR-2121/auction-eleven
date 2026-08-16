@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
-import { getConfiguredSquadSize, getFootballerRoles, getMinimumFootballersRequired, getOpeningBid, getSquadCompletion, getSquadPositionTargets, getStartingLineupSize } from "@auction-eleven/shared";
+import { getConfiguredSquadSize, getFootballerRoles, getMinimumFootballersRequired, getMinimumNextBid, getOpeningBid, getSquadCompletion, getSquadPositionTargets, getStartingLineupSize } from "@auction-eleven/shared";
 import type {
   AuctionPoolSizeMode,
   Award,
+  BlindClue,
+  BlindGuessResponse,
   AuctionStatePatch,
   BidEntry,
   ChatMessage,
@@ -22,6 +24,7 @@ import type {
 } from "@auction-eleven/shared";
 import { z } from "zod";
 import { FOOTBALLERS, FOOTBALLER_BY_ID } from "./footballers.js";
+import { matchFootballerGuess } from "./guessing.js";
 import {
   evaluateBotDecision,
   evaluateBotDone,
@@ -55,7 +58,7 @@ interface InternalManager extends Omit<ManagerView, "budget"> {
   controllerVersion: number;
 }
 
-interface InternalRoom extends Omit<RoomState, "managers" | "availableFootballers" | "poolSelectionValid" | "poolValidation" | "hasPassword"> {
+interface InternalRoom extends Omit<RoomState, "managers" | "availableFootballers" | "poolSelectionValid" | "poolValidation" | "hasPassword" | "blindRound"> {
   managers: InternalManager[];
   footballerPool: Footballer[];
   seenRequestIds: Set<string>;
@@ -73,6 +76,17 @@ interface InternalRoom extends Omit<RoomState, "managers" | "availableFootballer
   reauctionPhase: boolean;
   disconnectTimers: Map<string, NodeJS.Timeout>;
   auctionCompletionStarted: boolean;
+  blindTimers: NodeJS.Timeout[];
+  blindAssetToken: string | null;
+  blindRevealStage: 0 | 1 | 2 | 3 | 4 | 5;
+  blindStatus: "guessing" | "won" | "revealed" | "quick_auction" | null;
+  blindStartedAt: number | null;
+  blindClues: BlindClue[];
+  blindWinnerManagerId: string | null;
+  blindWinnerManagerName: string | null;
+  blindGuessTimeMs: number | null;
+  lastBlindGuessAt: Map<string, number>;
+  blindStats: Map<string, { wins: number; fastestMs: number | null; iconWins: number; currentWins: number }>;
   botOpponentModels: Map<string, OpponentModelState>;
   botMarketHistory: MarketSale[];
 }
@@ -86,6 +100,11 @@ const poolTargetsSchema = z.object({
   FWD: z.number().int().min(0).max(80)
 });
 const settingsSchema = z.object({
+  gameMode: z.enum(["normal", "blind"]).optional(),
+  blindRevealSeconds: z.union([z.literal(10), z.literal(15), z.literal(20), z.literal(30)]).optional(),
+  blindDifficulty: z.enum(["easy", "normal", "hard"]).optional(),
+  blindClues: z.enum(["off", "light", "normal", "more"]).optional(),
+  blindNoGuess: z.enum(["quick_auction", "skip"]).optional(),
   startingBudget: z.number().int().min(300).max(3000).optional(),
   minimumBid: z.number().int().min(1).max(50).optional(),
   bidIncrement: z.number().int().min(1).max(20).optional(),
@@ -553,9 +572,7 @@ export class RoomManager {
     const footballer = room.currentFootballer;
     if (!footballer || room.phase !== "auction") return [];
     const maximumSquadSize = this.configuredSquadSize(room);
-    const requiredBid = room.currentBid === 0
-      ? getOpeningBid(room.settings, footballer)
-      : room.currentBid + room.settings.bidIncrement;
+    const requiredBid = getMinimumNextBid(room.settings, room.currentBid, footballer);
     return room.managers.filter(manager => {
       if (!(manager.isBot || manager.connected)) return false;
       if (manager.auctionComplete || manager.squad.length >= maximumSquadSize) return false;
@@ -579,6 +596,7 @@ export class RoomManager {
    */
   private evaluateAuctionCompletion(room: InternalRoom): boolean {
     if (room.phase !== "auction" || room.transitionRoundId || !room.currentFootballer) return false;
+    if (room.settings.gameMode === "blind" && room.blindStatus !== "quick_auction") return false;
     const active = this.managersAbleToChallenge(room);
 
     if (room.highestBidderId) {
@@ -603,6 +621,7 @@ export class RoomManager {
 
   private markManagerPassedForCurrentRound(room: InternalRoom, managerId: string): void {
     if (room.phase !== "auction" || room.transitionRoundId || !room.currentFootballer) return;
+    if (room.settings.gameMode === "blind" && room.blindStatus !== "quick_auction") return;
     if (!room.passedManagerIds.includes(managerId)) room.passedManagerIds = [...room.passedManagerIds, managerId];
   }
 
@@ -704,6 +723,64 @@ export class RoomManager {
     host.ready = true;
   }
 
+  private clearBlindTimers(room: InternalRoom): void {
+    room.blindTimers.forEach(clearTimeout);
+    room.blindTimers = [];
+  }
+
+  private blindRevealImageUrl(room: InternalRoom): string {
+    if (!room.blindAssetToken) return "";
+    return `/api/blind-stage/${encodeURIComponent(room.blindAssetToken)}/${room.blindRevealStage}.webp`;
+  }
+
+  private blindCluesFor(room: InternalRoom, footballer: Footballer, stage: number): BlindClue[] {
+    const level = room.settings.blindClues;
+    if (level === "off") return [];
+    const thresholds = level === "light"
+      ? { position: 3, country: 4, type: 99, ovr: 99 }
+      : level === "more"
+        ? { position: 1, country: 2, type: 3, ovr: 4 }
+        : { position: 2, country: 3, type: 4, ovr: 4 };
+    const clues: BlindClue[] = [];
+    if (stage >= thresholds.position) clues.push({ label: "POSITION", value: getFootballerRoles(footballer).slice(0, 2).join(" / ") });
+    if (stage >= thresholds.country) clues.push({ label: "COUNTRY", value: footballer.country });
+    if (stage >= thresholds.type) clues.push({ label: "TYPE", value: footballer.playerType === "ICON" ? "ICON" : "CURRENT" });
+    if (stage >= thresholds.ovr) {
+      const low = Math.max(0, Math.floor(footballer.overall / 5) * 5);
+      clues.push({ label: "OVR", value: `${low}-${Math.min(99, low + 4)}` });
+    }
+    return clues;
+  }
+
+  private blindPublicState(room: InternalRoom) {
+    if (room.settings.gameMode !== "blind" || !room.blindStatus || !room.currentFootballer || !room.blindStartedAt) return null;
+    const revealed = room.blindStatus !== "guessing";
+    return {
+      blindRoundId: room.roundId,
+      status: room.blindStatus,
+      revealStage: room.blindRevealStage,
+      revealImageUrl: this.blindRevealImageUrl(room),
+      startedAt: room.blindStartedAt,
+      endsAt: room.endsAt,
+      clues: room.blindClues,
+      revealedFootballer: revealed ? room.currentFootballer : null,
+      winnerManagerId: room.blindWinnerManagerId,
+      winnerManagerName: room.blindWinnerManagerName,
+      guessedAtMs: room.blindGuessTimeMs
+    } as const;
+  }
+
+  getBlindRevealFootballer(assetToken: string, stageInput: number): Footballer {
+    const stage = Math.max(0, Math.min(5, Math.round(stageInput)));
+    for (const room of this.rooms.values()) {
+      if (!room.blindAssetToken || room.blindAssetToken !== assetToken || !room.currentFootballer) continue;
+      const maxStage = room.blindStatus === "guessing" ? room.blindRevealStage : 5;
+      if (stage > maxStage) throw new Error("That reveal stage is not available yet.");
+      return room.currentFootballer;
+    }
+    throw new Error("Blind reveal asset expired.");
+  }
+
   private publicState(room: InternalRoom, viewerManagerId?: string): RoomState {
     const revealAllBudgets = room.phase === "finished";
     const poolValidation = this.poolValidationFor(room);
@@ -729,7 +806,8 @@ export class RoomManager {
       roundIndex: room.roundIndex,
       roundId: room.roundId,
       totalRounds: room.totalRounds,
-      currentFootballer: room.currentFootballer,
+      currentFootballer: room.settings.gameMode === "blind" && room.blindStatus === "guessing" ? null : room.currentFootballer,
+      blindRound: this.blindPublicState(room),
       currentBid: room.currentBid,
       highestBidderId: room.highestBidderId,
       endsAt: room.endsAt,
@@ -832,6 +910,17 @@ export class RoomManager {
       reauctionPhase: false,
       disconnectTimers: new Map(),
       auctionCompletionStarted: false,
+      blindTimers: [],
+      blindAssetToken: null,
+      blindRevealStage: 0,
+      blindStatus: null,
+      blindStartedAt: null,
+      blindClues: [],
+      blindWinnerManagerId: null,
+      blindWinnerManagerName: null,
+      blindGuessTimeMs: null,
+      lastBlindGuessAt: new Map(),
+      blindStats: new Map(),
       botOpponentModels: new Map(),
       botMarketHistory: []
     };
@@ -916,6 +1005,7 @@ export class RoomManager {
       .filter(room => filters.managerLimit === undefined || room.settings.managerLimit === filters.managerLimit)
       .filter(room => filters.pricingMode === undefined || room.settings.pricingMode === filters.pricingMode)
       .filter(room => filters.playerPoolMode === undefined || room.settings.playerPoolMode === filters.playerPoolMode)
+      .filter(room => filters.gameMode === undefined || room.settings.gameMode === filters.gameMode)
       .filter(room => filters.access === undefined || room.access === filters.access)
       .map(room => ({
         code: room.code,
@@ -927,6 +1017,7 @@ export class RoomManager {
         openSlots: Math.max(0, room.settings.managerLimit - room.managers.length),
         pricingMode: room.settings.pricingMode,
         playerPoolMode: room.settings.playerPoolMode,
+        gameMode: room.settings.gameMode,
         squadSize: room.settings.squadSize,
         substituteCount: room.settings.substituteCount,
         auctionSeconds: room.settings.auctionSeconds,
@@ -1181,6 +1272,17 @@ export class RoomManager {
     room.awards = [];
     room.formationEndsAt = null;
     room.passedManagerIds = [];
+    this.clearBlindTimers(room);
+    room.blindAssetToken = null;
+    room.blindRevealStage = 0;
+    room.blindStatus = null;
+    room.blindStartedAt = null;
+    room.blindClues = [];
+    room.blindWinnerManagerId = null;
+    room.blindWinnerManagerName = null;
+    room.blindGuessTimeMs = null;
+    room.lastBlindGuessAt.clear();
+    room.blindStats.clear();
     room.botOpponentModels.clear();
     room.botMarketHistory = [];
     room.managers.forEach(manager => {
@@ -1203,14 +1305,25 @@ export class RoomManager {
       this.beginFormation(room);
       return;
     }
+
     const maximumSquadSize = this.configuredSquadSize(room);
-    const openingFloor = room.settings.minimumBid;
-    const noManagerCanBuyMore = room.managers.every(manager =>
-      manager.auctionComplete || manager.squad.length >= maximumSquadSize || manager.budget < openingFloor
-    );
-    if (noManagerCanBuyMore) {
-      this.beginFormation(room);
-      return;
+    if (room.settings.gameMode === "normal") {
+      const openingFloor = room.settings.minimumBid;
+      const noManagerCanBuyMore = room.managers.every(manager =>
+        manager.auctionComplete || manager.squad.length >= maximumSquadSize || manager.budget < openingFloor
+      );
+      if (noManagerCanBuyMore) {
+        this.beginFormation(room);
+        return;
+      }
+    } else {
+      const nobodyCanReceiveAnotherPlayer = room.managers.every(manager =>
+        manager.auctionComplete || manager.squad.length >= maximumSquadSize
+      );
+      if (nobodyCanReceiveAnotherPlayer) {
+        this.beginFormation(room);
+        return;
+      }
     }
 
     while (room.roundIndex < room.footballerPool.length) {
@@ -1221,15 +1334,13 @@ export class RoomManager {
     }
 
     if (room.roundIndex >= room.footballerPool.length) {
-      if (room.settings.reauctionUnsold && !room.reauctionPhase && room.reauctionQueue.length > 0) {
+      if (room.settings.gameMode === "normal" && room.settings.reauctionUnsold && !room.reauctionPhase && room.reauctionQueue.length > 0) {
         room.reauctionPhase = true;
         room.footballerPool = shuffle([...new Map(room.reauctionQueue.map(player => [player.id, player])).values()]);
         room.roundIndex = 0;
         room.reauctionQueue = [];
         for (const player of room.footballerPool) room.playerStatus.set(player.id, "QUEUED");
       } else {
-        // Never throw from an asynchronous timer. If the configured reserve was
-        // exhausted, move forward safely with the squads that were actually won.
         this.beginFormation(room);
         return;
       }
@@ -1241,6 +1352,18 @@ export class RoomManager {
       return;
     }
 
+    if (room.settings.gameMode === "blind") {
+      this.beginBlindRound(room, footballer);
+      return;
+    }
+
+    room.blindAssetToken = null;
+    room.blindStatus = null;
+    room.blindStartedAt = null;
+    room.blindClues = [];
+    room.blindWinnerManagerId = null;
+    room.blindWinnerManagerName = null;
+    room.blindGuessTimeMs = null;
     room.phase = "auction";
     room.currentFootballer = footballer;
     room.playerStatus.set(footballer.id, "ACTIVE");
@@ -1252,9 +1375,168 @@ export class RoomManager {
     room.roundId = this.id("round");
     room.seenRequestIds.clear();
     room.endsAt = Date.now() + room.settings.auctionSeconds * 1000;
+
+    if (this.evaluateAuctionCompletion(room)) return;
+
     this.scheduleEnd(room);
     this.scheduleBots(room);
     this.broadcast(room);
+  }
+
+  private beginBlindRound(room: InternalRoom, footballer: Footballer): void {
+    const startedAt = Date.now();
+    room.phase = "auction";
+    room.currentFootballer = footballer;
+    room.playerStatus.set(footballer.id, "ACTIVE");
+    room.currentBid = 0;
+    room.highestBidderId = null;
+    room.bidHistory = [];
+    room.passedManagerIds = [];
+    room.lastWinner = null;
+    room.roundId = this.id("blind");
+    room.seenRequestIds.clear();
+    room.lastBlindGuessAt.clear();
+    room.blindAssetToken = crypto.randomBytes(24).toString("base64url");
+    room.blindRevealStage = 0;
+    room.blindStatus = "guessing";
+    room.blindStartedAt = startedAt;
+    room.blindClues = this.blindCluesFor(room, footballer, 0);
+    room.blindWinnerManagerId = null;
+    room.blindWinnerManagerName = null;
+    room.blindGuessTimeMs = null;
+    room.endsAt = startedAt + room.settings.blindRevealSeconds * 1000;
+    this.scheduleBlindReveal(room);
+    this.broadcast(room);
+  }
+
+  private blindStageFractions(room: InternalRoom): number[] {
+    if (room.settings.blindDifficulty === "easy") return [.14, .30, .46, .64];
+    if (room.settings.blindDifficulty === "hard") return [.30, .52, .70, .86];
+    return [.20, .40, .58, .76];
+  }
+
+  private scheduleBlindReveal(room: InternalRoom): void {
+    this.clearBlindTimers(room);
+    if (room.timer) clearTimeout(room.timer);
+    room.timer = null;
+    const roundId = room.roundId;
+    const duration = room.settings.blindRevealSeconds * 1000;
+    this.blindStageFractions(room).forEach((fraction, index) => {
+      const stage = (index + 1) as 1 | 2 | 3 | 4;
+      const timer = this.safeTimer(room, `blind_reveal_stage_${stage}`, () => {
+        const latest = this.rooms.get(room.code);
+        if (!latest || latest.roundId !== roundId || latest.phase !== "auction" || latest.blindStatus !== "guessing" || !latest.currentFootballer) return;
+        latest.blindRevealStage = stage;
+        latest.blindClues = this.blindCluesFor(latest, latest.currentFootballer, stage);
+        this.broadcast(latest);
+      }, Math.round(duration * fraction));
+      room.blindTimers.push(timer);
+    });
+    room.timer = this.safeTimer(room, "blind_round_timeout", () => this.handleBlindTimeout(room.code, roundId), duration);
+  }
+
+  private handleBlindTimeout(code: string, roundId: string): void {
+    const room = this.rooms.get(code.trim().toUpperCase());
+    if (!room || room.roundId !== roundId || room.phase !== "auction" || room.blindStatus !== "guessing" || !room.currentFootballer) return;
+    if (room.timer) clearTimeout(room.timer);
+    room.timer = null;
+    this.clearBlindTimers(room);
+    room.endsAt = null;
+    room.blindRevealStage = 5;
+    room.blindClues = this.blindCluesFor(room, room.currentFootballer, 5);
+    room.blindStatus = "revealed";
+    this.broadcast(room);
+
+    room.timer = this.safeTimer(room, "blind_reveal_result", () => {
+      const latest = this.rooms.get(room.code);
+      if (!latest || latest.roundId !== roundId || latest.blindStatus !== "revealed" || !latest.currentFootballer) return;
+      if (latest.settings.blindNoGuess === "quick_auction") this.startBlindQuickAuction(latest);
+      else this.finishBlindUnclaimed(latest, roundId);
+    }, 1100);
+  }
+
+  private startBlindQuickAuction(room: InternalRoom): void {
+    if (!room.currentFootballer || room.blindStatus !== "revealed") return;
+    if (room.timer) clearTimeout(room.timer);
+    room.timer = null;
+    room.transitionRoundId = null;
+    room.blindStatus = "quick_auction";
+    room.blindRevealStage = 5;
+    room.currentBid = 0;
+    room.highestBidderId = null;
+    room.bidHistory = [];
+    room.passedManagerIds = [];
+    room.seenRequestIds.clear();
+    room.endsAt = Date.now() + Math.min(10, room.settings.auctionSeconds) * 1000;
+    this.broadcast(room);
+    if (this.evaluateAuctionCompletion(room)) return;
+    this.scheduleEnd(room);
+    this.scheduleBots(room);
+  }
+
+  private finishBlindUnclaimed(room: InternalRoom, roundId: string): void {
+    if (!room.currentFootballer || room.roundId !== roundId || room.transitionRoundId === roundId) return;
+    room.transitionRoundId = roundId;
+    this.clearTimers(room);
+    room.endsAt = null;
+    room.blindRevealStage = 5;
+    room.blindStatus = "revealed";
+    room.playerStatus.set(room.currentFootballer.id, "SKIPPED");
+    room.lastWinner = null;
+    room.phase = "round_result";
+    this.broadcast(room);
+    room.timer = this.safeTimer(room, "blind_skip_result_complete", () => {
+      const latest = this.rooms.get(room.code);
+      if (!latest || latest.roundId !== roundId || latest.phase !== "round_result") return;
+      latest.roundIndex++;
+      this.beginRound(latest);
+    }, 2000);
+  }
+
+  private finalizeBlindWinner(room: InternalRoom, manager: InternalManager): void {
+    const footballer = room.currentFootballer;
+    if (!footballer || room.blindStatus !== "guessing" || room.transitionRoundId) return;
+    const roundId = room.roundId;
+    room.transitionRoundId = roundId;
+    this.clearTimers(room);
+    room.endsAt = null;
+    room.blindRevealStage = 5;
+    room.blindClues = this.blindCluesFor(room, footballer, 5);
+    room.blindStatus = "won";
+    room.blindWinnerManagerId = manager.id;
+    room.blindWinnerManagerName = manager.name;
+    room.blindGuessTimeMs = Math.max(0, Date.now() - (room.blindStartedAt ?? Date.now()));
+
+    if (manager.squad.length < this.configuredSquadSize(room) && !this.managerOwns(manager, footballer)) {
+      manager.squad.push({ footballer, price: 0, round: room.roundIndex + 1 });
+      room.playerStatus.set(footballer.id, "SOLD");
+      const current = room.blindStats.get(manager.id) ?? { wins: 0, fastestMs: null, iconWins: 0, currentWins: 0 };
+      current.wins++;
+      current.fastestMs = current.fastestMs === null ? room.blindGuessTimeMs : Math.min(current.fastestMs, room.blindGuessTimeMs);
+      if (footballer.playerType === "ICON") current.iconWins++;
+      else current.currentWins++;
+      room.blindStats.set(manager.id, current);
+      this.syncAutomaticAuctionCompletion(room);
+      room.lastWinner = {
+        managerName: manager.name,
+        footballerName: footballer.name,
+        amount: 0,
+        blind: true,
+        guessedAtMs: room.blindGuessTimeMs
+      };
+    } else {
+      room.playerStatus.set(footballer.id, "FINISHED");
+      room.lastWinner = null;
+    }
+
+    room.phase = "round_result";
+    this.broadcast(room);
+    room.timer = this.safeTimer(room, "blind_win_result_complete", () => {
+      const latest = this.rooms.get(room.code);
+      if (!latest || latest.roundId !== roundId || latest.phase !== "round_result") return;
+      latest.roundIndex++;
+      this.beginRound(latest);
+    }, 2200);
   }
 
   private scheduleEnd(room: InternalRoom): void {
@@ -1267,6 +1549,7 @@ export class RoomManager {
   private scheduleBots(room: InternalRoom): void {
     room.botTimers.forEach(clearTimeout);
     room.botTimers = [];
+    if (room.settings.gameMode === "blind" && room.blindStatus !== "quick_auction") return;
     const footballer = room.currentFootballer;
     if (!footballer || room.phase !== "auction" || room.transitionRoundId) return;
     const roundId = room.roundId;
@@ -1393,13 +1676,44 @@ export class RoomManager {
     if (room.seenRequestIds.has(requestId)) return;
     room.seenRequestIds.add(requestId);
     if (manager.auctionComplete) throw new Error("You already finished bidding for this auction.");
-    if (room.passedManagerIds.includes(manager.id)) return;
+    if (room.passedManagerIds.includes(manager.id)) throw new Error("You already passed on this player.");
 
     this.markManagerPassedForCurrentRound(room, manager.id);
     room.botOpponentModels.set(manager.id, recordObservedPass(room.botOpponentModels.get(manager.id)));
     if (this.evaluateAuctionCompletion(room)) return;
     this.broadcastAuctionPatch(room);
     this.scheduleBots(room);
+  }
+
+  submitBlindGuess(code: string, managerId: string, requestId: string, blindRoundId: string, guessInput: string): BlindGuessResponse {
+    const room = this.get(code);
+    const manager = this.managerIn(room, managerId);
+    if (room.settings.gameMode !== "blind") throw new Error("This room is using Normal Auction mode.");
+    if (!requestId || requestId.length > 100) throw new Error("Invalid guess request.");
+    if (room.seenRequestIds.has(requestId)) return { result: "round_finished", message: "That guess was already processed." };
+    room.seenRequestIds.add(requestId);
+    if (room.phase !== "auction" || room.blindStatus !== "guessing" || room.transitionRoundId || blindRoundId !== room.roundId) {
+      return { result: "round_finished", message: "That Blind Auction round has already ended." };
+    }
+    if (!room.currentFootballer) return { result: "round_finished", message: "Waiting for the next mystery footballer." };
+    if (manager.isBot) throw new Error("AI managers do not receive hidden footballer identities in Blind Auction.");
+    if (!manager.connected) throw new Error("Reconnect before submitting another guess.");
+    if (manager.auctionComplete) throw new Error("You already finished participating in this auction.");
+    if (manager.squad.length >= this.configuredSquadSize(room)) throw new Error("Your squad is full.");
+
+    const now = Date.now();
+    const lastGuess = room.lastBlindGuessAt.get(manager.id) ?? 0;
+    if (now - lastGuess < 450) return { result: "rate_limited", message: "Wait a moment before guessing again." };
+    room.lastBlindGuessAt.set(manager.id, now);
+
+    const guess = guessInput.trim().slice(0, 80);
+    if (!guess) return { result: "incorrect", message: "Type a player name first." };
+    const result = matchFootballerGuess(room.currentFootballer, guess);
+    if (result === "ambiguous") return { result: "ambiguous", message: "Be more specific." };
+    if (result === "incorrect") return { result: "incorrect", message: "Wrong — try again." };
+
+    this.finalizeBlindWinner(room, manager);
+    return { result: "correct", message: "Correct! You guessed first." };
   }
 
   completeAuction(code: string, managerId: string): void {
@@ -1558,6 +1872,20 @@ export class RoomManager {
       if (bestCurrent) awards.push({ title: "Best Current Signing", managerName: bestCurrent.manager.name, detail: `${bestCurrent.entry.footballer.name} • OVR ${bestCurrent.entry.footballer.overall}` });
       if (expensiveIcon) awards.push({ title: "Most Expensive Icon", managerName: expensiveIcon.manager.name, detail: `${expensiveIcon.entry.footballer.name} for ${expensiveIcon.entry.price}M` });
     }
+    if (room.settings.gameMode === "blind" && room.blindStats.size > 0) {
+      const entries = [...room.blindStats.entries()].map(([managerId, stats]) => ({
+        manager: room.managers.find(item => item.id === managerId),
+        ...stats
+      })).filter(item => !!item.manager);
+      const sharpest = [...entries].sort((a, b) => b.wins - a.wins)[0];
+      const fastest = [...entries].filter(item => item.fastestMs !== null).sort((a, b) => (a.fastestMs ?? Infinity) - (b.fastestMs ?? Infinity))[0];
+      const iconExpert = [...entries].filter(item => item.iconWins > 0).sort((a, b) => b.iconWins - a.iconWins)[0];
+      const modernExpert = [...entries].filter(item => item.currentWins > 0).sort((a, b) => b.currentWins - a.currentWins)[0];
+      if (sharpest?.manager && sharpest.wins > 0) awards.push({ title: "Sharpest Eye", managerName: sharpest.manager.name, detail: `${sharpest.wins} first correct guess${sharpest.wins === 1 ? "" : "es"}` });
+      if (fastest?.manager && fastest.fastestMs !== null) awards.push({ title: "Fastest Guess", managerName: fastest.manager.name, detail: `${(fastest.fastestMs / 1000).toFixed(2)}s after reveal started` });
+      if (iconExpert?.manager) awards.push({ title: "Icon Expert", managerName: iconExpert.manager.name, detail: `${iconExpert.iconWins} icon guess${iconExpert.iconWins === 1 ? "" : "es"}` });
+      if (modernExpert?.manager) awards.push({ title: "Modern Football Expert", managerName: modernExpert.manager.name, detail: `${modernExpert.currentWins} current-player guess${modernExpert.currentWins === 1 ? "" : "es"}` });
+    }
     room.awards = awards;
     this.broadcast(room);
   }
@@ -1627,5 +1955,6 @@ export class RoomManager {
     room.timer = null;
     room.botTimers.forEach(clearTimeout);
     room.botTimers = [];
+    this.clearBlindTimers(room);
   }
 }

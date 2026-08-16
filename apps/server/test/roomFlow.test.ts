@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { getOpeningBid, type RoomState } from "@auction-eleven/shared";
+import { getOpeningBid, type Footballer, type RoomState } from "@auction-eleven/shared";
 import { FOOTBALLERS } from "../src/footballers.js";
 import { RoomManager } from "../src/roomManager.js";
 
@@ -385,6 +385,97 @@ describe("full squad room flow", () => {
     expect(() => manager.join(created.code, "Late", "session-late", "socket-late", "goal-2026")).toThrow(/room full/i);
   });
 
+});
+
+
+describe("v2.2 pass affordability and auction completion", () => {
+  type MutableManager = { id: string; budget: number };
+  type MutableRoom = { managers: MutableManager[] };
+  type MutableRoomManager = { rooms: Map<string, MutableRoom> };
+
+  const startRoom = (minimumBid = 1, bidIncrement = 1) => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const host = manager.create("PassHost", `session-pass-host-${minimumBid}-${bidIncrement}`, `socket-pass-host-${minimumBid}-${bidIncrement}`, false);
+    manager.updateSettings(host.code, host.managerId, { managerLimit: 2, squadSize: 6, substituteCount: 0, minimumBid, bidIncrement, auctionSeconds: 30 });
+    const guest = manager.join(host.code, "PassGuest", `session-pass-guest-${minimumBid}-${bidIncrement}`, `socket-pass-guest-${minimumBid}-${bidIncrement}`);
+    [host.managerId, guest.managerId].forEach(id => manager.setReady(host.code, id, true));
+    manager.start(host.code, host.managerId);
+    const room = (manager as unknown as MutableRoomManager).rooms.get(host.code)!;
+    return { manager, host, guest, room };
+  };
+
+  it("allows PASS when the manager cannot afford the next legal bid", () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, host, room } = startRoom(5, 5);
+      room.managers.find(item => item.id === host.managerId)!.budget = 3;
+      const state = manager.getState(host.code, host.managerId);
+      expect(() => manager.pass(host.code, host.managerId, "pass-low-budget", state.roundId)).not.toThrow();
+      expect(manager.getState(host.code, host.managerId).passedManagerIds).toContain(host.managerId);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("allows PASS with zero money", () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, host, room } = startRoom();
+      room.managers.find(item => item.id === host.managerId)!.budget = 0;
+      const state = manager.getState(host.code, host.managerId);
+      expect(() => manager.pass(host.code, host.managerId, "pass-zero-budget", state.roundId)).not.toThrow();
+      expect(manager.getState(host.code, host.managerId).passedManagerIds).toContain(host.managerId);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("returns a clear error when a manager tries to pass twice in the same round", () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, host } = startRoom();
+      const state = manager.getState(host.code, host.managerId);
+      manager.pass(host.code, host.managerId, "pass-once", state.roundId);
+      expect(() => manager.pass(host.code, host.managerId, "pass-twice", state.roundId)).toThrow(/already passed/i);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("allows PASS when the manager is below the opening price", () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, host, room } = startRoom(20, 5);
+      room.managers.find(item => item.id === host.managerId)!.budget = 10;
+      const state = manager.getState(host.code, host.managerId);
+      expect(() => manager.pass(host.code, host.managerId, "pass-below-opening", state.roundId)).not.toThrow();
+      expect(manager.getState(host.code, host.managerId).passedManagerIds).toContain(host.managerId);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("immediately sells to the existing leader when the only challenger passes because they cannot afford more", () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, host, guest, room } = startRoom(1, 5);
+      const state = manager.getState(host.code, host.managerId);
+      manager.bid(host.code, host.managerId, 1, "affordability-leading-bid", state.roundId);
+      room.managers.find(item => item.id === guest.managerId)!.budget = 5;
+      expect(() => manager.pass(host.code, guest.managerId, "affordability-pass-challenger", state.roundId)).not.toThrow();
+      const result = manager.getState(host.code, host.managerId);
+      expect(result.phase).toBe("round_result");
+      expect(result.lastWinner?.managerName).toBe("PassHost");
+      expect(result.lastWinner?.amount).toBe(1);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("marks the player skipped immediately when nobody can place a legal opening bid after eligibility changes", () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, host, guest, room } = startRoom(10, 5);
+      room.managers.find(item => item.id === host.managerId)!.budget = 0;
+      room.managers.find(item => item.id === guest.managerId)!.budget = 0;
+      const state = manager.getState(host.code, host.managerId);
+      manager.pass(host.code, host.managerId, "nobody-affords-pass", state.roundId);
+      const result = manager.getState(host.code, host.managerId);
+      expect(result.phase).toBe("round_result");
+      expect(result.lastWinner).toBeNull();
+      expect(result.endsAt).toBeNull();
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
 });
 
 describe("v1.6 player pools and private budgets", () => {
@@ -904,3 +995,117 @@ describe("v1.9 starter-based I'M DONE completion", () => {
   });
 
 });
+
+
+describe("v2.3 Blind Auction", () => {
+  type BlindUnsafeRoomManager = {
+    rooms: Map<string, {
+      currentFootballer: Footballer | null;
+      blindAssetToken: string | null;
+    }>;
+  };
+
+  function startTwoHumanBlind(manager: RoomManager, suffix: string, extra: Record<string, unknown> = {}) {
+    const host = manager.create(`BlindHost${suffix}`, `session-blind-host-${suffix}`, `socket-blind-host-${suffix}`, false);
+    manager.updateSettings(host.code, host.managerId, {
+      managerLimit: 2,
+      squadSize: 6,
+      substituteCount: 0,
+      gameMode: "blind",
+      blindRevealSeconds: 10,
+      blindDifficulty: "normal",
+      blindClues: "normal",
+      blindNoGuess: "quick_auction",
+      ...extra
+    });
+    const guest = manager.join(host.code, `BlindGuest${suffix}`, `session-blind-guest-${suffix}`, `socket-blind-guest-${suffix}`);
+    manager.setReady(host.code, host.managerId, true);
+    manager.setReady(host.code, guest.managerId, true);
+    manager.start(host.code, host.managerId);
+    return { host, guest };
+  }
+
+  it("keeps the hidden footballer identity out of normal client state", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const { host } = startTwoHumanBlind(manager, "Privacy");
+    const unsafe = manager as unknown as BlindUnsafeRoomManager;
+    const internal = unsafe.rooms.get(host.code)!;
+    const state = manager.getState(host.code, host.managerId);
+    expect(internal.currentFootballer).not.toBeNull();
+    expect(state.currentFootballer).toBeNull();
+    expect(state.blindRound?.revealedFootballer).toBeNull();
+    expect(state.blindRound?.status).toBe("guessing");
+    expect(state.blindRound?.revealImageUrl).not.toContain(internal.currentFootballer!.id);
+    expect(state.blindRound?.revealImageUrl).not.toContain(internal.currentFootballer!.name);
+  });
+
+  it("awards exactly the first correct server-received guess", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const { host, guest } = startTwoHumanBlind(manager, "Winner");
+    const unsafe = manager as unknown as BlindUnsafeRoomManager;
+    const hidden = unsafe.rooms.get(host.code)!.currentFootballer!;
+    const blindRoundId = manager.getState(host.code, host.managerId).blindRound!.blindRoundId;
+
+    expect(manager.submitBlindGuess(host.code, host.managerId, "guess-first", blindRoundId, hidden.name).result).toBe("correct");
+    expect(manager.submitBlindGuess(host.code, guest.managerId, "guess-second", blindRoundId, hidden.name).result).toBe("round_finished");
+
+    const result = manager.getState(host.code, host.managerId);
+    expect(result.phase).toBe("round_result");
+    expect(result.lastWinner?.blind).toBe(true);
+    expect(result.lastWinner?.managerName).toBe(`BlindHostWinner`);
+    expect(result.managers.find(item => item.id === host.managerId)?.squad.some(entry => entry.footballer.id === hidden.id)).toBe(true);
+    expect(result.managers.find(item => item.id === guest.managerId)?.squad.some(entry => entry.footballer.id === hidden.id)).toBe(false);
+  });
+
+  it("rate-limits rapid wrong guesses without revealing closeness", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const { host } = startTwoHumanBlind(manager, "Rate");
+    const blindRoundId = manager.getState(host.code, host.managerId).blindRound!.blindRoundId;
+    expect(manager.submitBlindGuess(host.code, host.managerId, "wrong-1", blindRoundId, "Definitely Not A Player").result).toBe("incorrect");
+    expect(manager.submitBlindGuess(host.code, host.managerId, "wrong-2", blindRoundId, "Another Wrong Guess").result).toBe("rate_limited");
+  });
+
+  it("does not allow a client to request future clear reveal stages", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const { host } = startTwoHumanBlind(manager, "Asset");
+    const unsafe = manager as unknown as BlindUnsafeRoomManager;
+    const room = unsafe.rooms.get(host.code)!;
+    expect(manager.getBlindRevealFootballer(room.blindAssetToken!, 0).id).toBe(room.currentFootballer!.id);
+    expect(() => manager.getBlindRevealFootballer(room.blindAssetToken!, 5)).toThrow(/not available yet/i);
+  });
+
+  it("reveals then enters the configured quick auction when nobody guesses", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const { host } = startTwoHumanBlind(manager, "Quick");
+      vi.advanceTimersByTime(10_000);
+      let state = manager.getState(host.code, host.managerId);
+      expect(state.blindRound?.status).toBe("revealed");
+      expect(state.blindRound?.revealStage).toBe(5);
+      expect(state.currentFootballer).not.toBeNull();
+
+      vi.advanceTimersByTime(1_100);
+      state = manager.getState(host.code, host.managerId);
+      expect(state.phase).toBe("auction");
+      expect(state.blindRound?.status).toBe("quick_auction");
+      expect(state.currentFootballer).not.toBeNull();
+      expect(state.endsAt).not.toBeNull();
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("reveals and skips cleanly when no-guess mode is SKIP", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const { host } = startTwoHumanBlind(manager, "Skip", { blindNoGuess: "skip" });
+      vi.advanceTimersByTime(11_100);
+      const state = manager.getState(host.code, host.managerId);
+      expect(state.phase).toBe("round_result");
+      expect(state.blindRound?.status).toBe("revealed");
+      expect(state.blindRound?.revealedFootballer).not.toBeNull();
+      expect(state.lastWinner).toBeNull();
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+});
+

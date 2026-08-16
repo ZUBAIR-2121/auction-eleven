@@ -3,7 +3,8 @@ import {
   FORMATIONS,
   getFootballerPrimaryRoles,
   getFootballerRoles,
-  getOpeningBid,
+  getMinimumNextBid,
+  isValidBidIncrement,
   getConfiguredSquadSize,
   getSquadCompletion,
   getStartingLineupSize,
@@ -20,6 +21,11 @@ import {
 } from "@auction-eleven/shared";
 
 export const DEFAULT_SETTINGS: GameSettings = {
+  gameMode: "normal",
+  blindRevealSeconds: 20,
+  blindDifficulty: "normal",
+  blindClues: "normal",
+  blindNoGuess: "quick_auction",
   startingBudget: 1000,
   minimumBid: 1,
   bidIncrement: 1,
@@ -56,10 +62,9 @@ export function validateBid(args: {
   const { amount, currentBid, manager, settings, auctionActive, footballer } = args;
   if (!auctionActive) return "This auction round is closed.";
   if (!Number.isInteger(amount)) return "Bids must use whole millions.";
-  const openingBid = getOpeningBid(settings, footballer);
-  const minimum = currentBid === 0 ? openingBid : currentBid + settings.bidIncrement;
+  const minimum = getMinimumNextBid(settings, currentBid, footballer);
   if (amount < minimum) return `Minimum valid bid is ${minimum}M.`;
-  if ((amount - settings.minimumBid) % settings.bidIncrement !== 0) return `Bid must follow the ${settings.bidIncrement}M increment.`;
+  if (!isValidBidIncrement(amount, settings)) return `Bid must follow the ${settings.bidIncrement}M increment.`;
   if (amount > manager.budget) return "You do not have enough budget.";
   const maximumSquadSize = getConfiguredSquadSize(settings.squadSize, settings.substituteCount);
   if (manager.squad.length >= maximumSquadSize) return `Your squad is full (${getStartingLineupSize(settings.squadSize)} starters + ${settings.substituteCount} substitutes).`;

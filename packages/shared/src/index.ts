@@ -11,7 +11,29 @@ export type PlayerPoolMode = "current" | "icons" | "mixed" | "custom";
 export type AuctionPoolSizeMode = "quick" | "standard" | "large" | "all" | "custom";
 export type IconFrequency = "low" | "normal" | "high";
 export type RoomAccess = "public" | "password";
+export type GameMode = "normal" | "blind";
+export type BlindDifficulty = "easy" | "normal" | "hard";
+export type BlindClueLevel = "off" | "light" | "normal" | "more";
+export type BlindNoGuessMode = "quick_auction" | "skip";
+export type BlindGuessResultCode = "correct" | "incorrect" | "ambiguous" | "rate_limited" | "round_finished";
 export const MAX_SUBSTITUTES = 10;
+
+/**
+ * Normalizes a typed Blind Auction answer without changing the displayed
+ * footballer name. This intentionally removes accents and harmless punctuation
+ * while keeping letters/numbers so aliases can be matched consistently.
+ */
+export function normalizeFootballerGuess(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[’'`´]/g, " ")
+    .replace(/[-_.]+/g, " ")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 /** The number of players placed on the pitch for the selected squad target. */
 export const getStartingLineupSize = (squadSize: number): number => Math.min(11, Math.max(6, Math.round(squadSize)));
 /** Exact configured squad size for a room: starters plus host-selected substitutes. */
@@ -277,6 +299,11 @@ export interface BidEntry {
 }
 
 export interface GameSettings {
+  gameMode: GameMode;
+  blindRevealSeconds: 10 | 15 | 20 | 30;
+  blindDifficulty: BlindDifficulty;
+  blindClues: BlindClueLevel;
+  blindNoGuess: BlindNoGuessMode;
   startingBudget: number;
   minimumBid: number;
   bidIncrement: number;
@@ -318,6 +345,46 @@ export function getOpeningBid(
   const eliteCurve = .68 + Math.max(0, footballer.overall - 85) * .025;
   const rawOpening = Math.max(minimumBid, Math.round(footballer.basePrice * eliteCurve * budgetScale));
   const steps = Math.max(0, Math.ceil((rawOpening - minimumBid) / increment));
+  return minimumBid + steps * increment;
+}
+
+/** The next legal amount for the active round, shared by server validation and the bid UI. */
+export function getMinimumNextBid(
+  settings: Pick<GameSettings, "startingBudget" | "minimumBid" | "bidIncrement" | "pricingMode">,
+  currentBid: number,
+  footballer?: Pick<Footballer, "overall" | "basePrice"> | null
+): number {
+  const increment = Math.max(1, Math.round(settings.bidIncrement));
+  return currentBid > 0
+    ? Math.round(currentBid) + increment
+    : getOpeningBid(settings, footballer);
+}
+
+/** True only when an amount sits on the room's whole-million bid increment ladder. */
+export function isValidBidIncrement(
+  amount: number,
+  settings: Pick<GameSettings, "minimumBid" | "bidIncrement">
+): boolean {
+  if (!Number.isInteger(amount)) return false;
+  const minimumBid = Math.max(1, Math.round(settings.minimumBid));
+  const increment = Math.max(1, Math.round(settings.bidIncrement));
+  return amount >= minimumBid && (amount - minimumBid) % increment === 0;
+}
+
+/**
+ * Rounds a proposed amount UP to the next legal whole-million bid step while
+ * never going below the supplied legal floor. This is used for quick-bid
+ * controls only; the server still independently validates every submitted bid.
+ */
+export function normalizeBidAmount(
+  amount: number,
+  settings: Pick<GameSettings, "minimumBid" | "bidIncrement">,
+  floor: number
+): number {
+  const minimumBid = Math.max(1, Math.round(settings.minimumBid));
+  const increment = Math.max(1, Math.round(settings.bidIncrement));
+  const requested = Math.max(minimumBid, Math.round(floor), Number.isFinite(amount) ? Math.round(amount) : Math.round(floor));
+  const steps = Math.max(0, Math.ceil((requested - minimumBid) / increment));
   return minimumBid + steps * increment;
 }
 
@@ -379,6 +446,7 @@ export interface RoomDirectoryEntry {
   openSlots: number;
   pricingMode: PricingMode;
   playerPoolMode: PlayerPoolMode;
+  gameMode: GameMode;
   squadSize: SquadSize;
   substituteCount: SubstituteCount;
   auctionSeconds: number;
@@ -389,7 +457,33 @@ export interface RoomDirectoryFilters {
   managerLimit?: ManagerLimit;
   pricingMode?: PricingMode;
   playerPoolMode?: PlayerPoolMode;
+  gameMode?: GameMode;
   access?: RoomAccess;
+}
+
+export interface BlindClue {
+  label: "POSITION" | "COUNTRY" | "TYPE" | "OVR";
+  value: string;
+}
+
+export interface BlindRoundPublicState {
+  blindRoundId: string;
+  status: "guessing" | "won" | "revealed" | "quick_auction";
+  revealStage: 0 | 1 | 2 | 3 | 4 | 5;
+  revealImageUrl: string;
+  startedAt: number;
+  endsAt: number | null;
+  clues: BlindClue[];
+  /** Present only after the answer is legitimately revealed. */
+  revealedFootballer: Footballer | null;
+  winnerManagerId: string | null;
+  winnerManagerName: string | null;
+  guessedAtMs: number | null;
+}
+
+export interface BlindGuessResponse {
+  result: BlindGuessResultCode;
+  message: string;
 }
 
 export interface RoomState {
@@ -413,13 +507,14 @@ export interface RoomState {
   roundId: string;
   totalRounds: number;
   currentFootballer: Footballer | null;
+  blindRound: BlindRoundPublicState | null;
   currentBid: number;
   highestBidderId: string | null;
   endsAt: number | null;
   formationEndsAt: number | null;
   bidHistory: BidEntry[];
   passedManagerIds: string[];
-  lastWinner: { managerName: string; footballerName: string; amount: number; automatic?: boolean } | null;
+  lastWinner: { managerName: string; footballerName: string; amount: number; automatic?: boolean; blind?: boolean; guessedAtMs?: number } | null;
   rankings: Ranking[];
   awards: Award[];
   chatMessages: ChatMessage[];
@@ -453,6 +548,7 @@ export interface ClientToServerEvents {
   "auction:bid": (payload: { code: string; amount: number; requestId: string; roundId: string }, ack: Ack<null>) => void;
   "auction:pass": (payload: { code: string; roundId: string; requestId: string }, ack: Ack<null>) => void;
   "auction:complete": (payload: { code: string }, ack: Ack<null>) => void;
+  "blind:guess": (payload: { code: string; blindRoundId: string; requestId: string; guess: string }, ack: Ack<BlindGuessResponse>) => void;
   "lineup:submit": (payload: { code: string; formationId: string; picks: LineupPick[] }, ack: Ack<null>) => void;
   "room:reaction": (payload: { code: string; reaction: string }) => void;
   "chat:send": (payload: { code: string; text: string }, ack: Ack<null>) => void;

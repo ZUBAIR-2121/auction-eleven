@@ -2952,3 +2952,97 @@ html[data-ae-performance="performance"] .compact-bid-dock { box-shadow:none!impo
 @media(max-width:720px){.blind-stage-card{grid-template-columns:132px minmax(0,1fr);grid-template-areas:"image meta" "image clues" "name name";gap:8px;padding:8px}.blind-reveal-frame{height:min(34vh,250px);border-radius:16px}.blind-clues{gap:5px}.blind-clues>span{min-width:72px;padding:7px 8px}.blind-revealed-name strong{font-size:22px}.blind-guess-dock{grid-template-columns:minmax(0,1fr) auto;padding:8px 8px calc(8px + env(safe-area-inset-bottom))}.blind-guess-dock .complete-auction{grid-column:1/-1;min-height:38px}.blind-feedback{font-size:11px}.blind-room-options>div{align-items:flex-start;flex-direction:column}}
 @media(max-height:470px) and (orientation:landscape){.blind-arena .arena-top{padding-block:5px}.blind-stage-card{grid-template-columns:180px minmax(0,1fr);grid-template-areas:"image meta" "image clues" "image name";padding:5px 8px;gap:5px 10px}.blind-reveal-frame{height:min(48vh,185px);width:150px}.blind-clues>span{padding:5px 7px}.blind-revealed-name{padding:7px}.blind-revealed-name strong{font-size:18px}.blind-guess-dock{padding-top:5px;padding-bottom:max(5px,env(safe-area-inset-bottom));grid-template-columns:minmax(0,1fr) auto auto}.blind-guess-dock input,.blind-guess-dock button{min-height:40px}.blind-feedback{display:none}}
 @media(prefers-reduced-motion:reduce){.blind-reveal-frame,.blind-reveal-frame img{transition:none!important}}
+
+/* v2.3.1 Blind reveal reliability */
+.blind-reveal-frame img{transition:opacity .16s ease,transform .18s ease}.blind-image-fallback{width:100%;height:100%;display:grid;place-items:center;align-content:center;gap:6px;text-align:center;background:radial-gradient(circle at 50% 35%,rgba(140,255,84,.12),transparent 35%),linear-gradient(145deg,#07100b,#10271a);color:var(--text);user-select:none;-webkit-user-select:none}.blind-image-fallback span{display:grid;place-items:center;width:72px;height:72px;border-radius:50%;font-size:42px;font-weight:900;color:var(--accent-a);background:rgba(140,255,84,.08);border:1px solid rgba(140,255,84,.24)}.blind-image-fallback b{font-size:13px;letter-spacing:.16em}.blind-image-fallback small{max-width:220px;color:var(--muted);font-size:11px;line-height:1.35}.blind-reveal-frame[data-reveal-stage="0"] img{transform:scale(1.02)}.blind-reveal-frame[data-reveal-stage="4"] img,.blind-reveal-frame[data-reveal-stage="5"] img{transform:scale(1)}
+
+/* ==========================================================================
+   v3.0 — Universal single-scroll-owner fix for touch devices (mobile fix)
+   Problem: on real touch devices, some full pages (lobby, results,
+   formation) could render content taller than the viewport but the
+   page itself would not reliably respond to a touch/swipe scroll
+   gesture, even though the content existed in the DOM.
+   Fix: on touch/narrow viewports only (desktop/mouse layout is
+   untouched), each of these pages becomes a fixed, full-viewport flex
+   column. Its own inner content div (.ae-scroll-area) is the ONLY
+   scrollable element for that page, so no ancestor (body, #root,
+   .app-shell, or the page-transition wrapper) can compete for or trap
+   the scroll gesture. Class names are new and specificity is boosted
+   (class repeated) plus !important, so this always wins regardless of
+   any older overflow/height rule earlier in this file.
+   ========================================================================== */
+@media (hover: none), (pointer: coarse), (max-width: 1100px) {
+  main.ae-fixed-page.ae-fixed-page.ae-fixed-page {
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 1 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100% !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    min-height: 0 !important;
+    max-height: 100dvh !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    overscroll-behavior: none !important;
+    touch-action: auto !important;
+  }
+
+  .ae-scroll-area.ae-scroll-area.ae-scroll-area {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    width: 100% !important;
+    max-width: 1420px !important;
+    margin: 0 auto !important;
+    padding-top: max(120px, calc(96px + env(safe-area-inset-top))) !important;
+    padding-right: 12px !important;
+    padding-bottom: max(56px, calc(30px + env(safe-area-inset-bottom))) !important;
+    padding-left: 12px !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    overscroll-behavior-x: none !important;
+    overscroll-behavior-y: contain !important;
+    -webkit-overflow-scrolling: touch !important;
+    touch-action: pan-y pinch-zoom !important;
+    scroll-behavior: auto !important;
+  }
+
+  .ae-scroll-area.ae-scroll-area.ae-scroll-area > * {
+    max-width: 100% !important;
+    touch-action: pan-y !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .ae-scroll-area.ae-scroll-area.ae-scroll-area {
+    padding-right: 10px !important;
+    padding-left: 10px !important;
+  }
+}
+
+/* ==========================================================================
+   v3.0 — Blind Auction lock (temporarily disabled game mode)
+   ========================================================================== */
+.game-mode-buttons button.blind {
+  position: relative;
+  opacity: .62;
+  cursor: not-allowed;
+}
+.game-mode-buttons button.blind:hover { opacity: .74; }
+.game-mode-buttons button.blind .locked-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.22);
+  background: rgba(0,0,0,.55);
+  color: #ffd36b;
+  font-size: 7px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  font-weight: 800;
+}

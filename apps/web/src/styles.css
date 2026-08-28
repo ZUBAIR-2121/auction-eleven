@@ -3095,3 +3095,7 @@ button:not(:disabled):active { transform: scale(.97); }
   button:not(:disabled):active { transform: none !important; }
   .pitch-player-content, .bench-list > button { animation: none !important; }
 }
+
+/* Draggable chat bubble */
+.chat-launcher { cursor: grab; }
+.chat-launcher:active { cursor: grabbing; }

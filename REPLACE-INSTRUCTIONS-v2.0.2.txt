@@ -1,0 +1,12 @@
+Auction Eleven v2.0.2 — Custom Pool Order Test Fix
+
+Replace only:
+  apps/server/test/roomFlow.test.ts
+
+Why:
+The custom pool is intentionally server-shuffled, so its selected IDs may be returned in a different order. The regression test incorrectly compared array order instead of set membership. This patch verifies the exact two selected IDs independent of shuffle order.
+
+After replacing, run:
+  npm run typecheck
+  npm test
+  npm run build

@@ -1,32 +1,64 @@
-AUCTION ELEVEN v1.0 GAMEPLAY UPGRADE
+AUCTION ELEVEN — MOBILE SCROLL FIX + BLIND AUCTION LOCK
+=========================================================
 
-Included:
-- 12-second auction rounds (host can choose 10-30 seconds)
-- Late bids reset the countdown to exactly 5 seconds
-- Immediate resolution when every challenger passes
-- Immediate sale when only the leading bidder remains
-- 2-second SOLD screen and automatic next round
-- Existing Pass Player and I'm Done controls retained
-- Fullscreen landscape button
-- Compact/Comfort UI toggle saved per device
-- Fixed 100dvh game viewport with no full-page scrolling
-- Only squad, bid feed, chat and substitute panels scroll
-- Larger landscape touch controls and centered player card
-- Better squad budget/open-slot details during bidding
-- Tap-to-swap and hold/drag formation editing
-- Valid slots glow green, invalid slots glow red
-- Dragged card feedback, position OVR preview and vibration
-- Session resume after refresh remains enabled
+WHAT'S IN THIS FOLDER
+----------------------
+Only 2 files changed — same paths as in your project:
+  apps/web/src/main.tsx
+  apps/web/src/styles.css
 
-INSTALL:
-1. Extract this ZIP into C:\Auction\auction-eleven
-2. Choose Replace files in destination.
-3. Run:
-   npm install
-   npm run build
-4. Deploy:
-   git add .
-   git commit -m "Upgrade auction speed mobile UI and formation controls"
-   git push origin main
+WHAT CHANGED
+------------
+1. Mobile scroll fix — Lobby ("Room Managers") page and Results page
+   ("Final Leaderboard" / "Awards" / "Squads") now use a dedicated,
+   high-priority scroll container so touch-scrolling works reliably
+   on phones. Desktop/mouse layout is untouched (fix only applies on
+   touch devices / narrow screens).
 
-Vercel and Render will redeploy automatically.
+2. Blind Auction locked — tapping "Blind Auction" in the lobby now
+   shows a "Blind Auction is under development. Coming soon!" message
+   and a SOON badge, instead of switching game modes.
+
+HOW TO APPLY (VS Code)
+-----------------------
+1. Unzip this folder.
+2. Copy the two files into your project, overwriting the originals:
+     apps/web/src/main.tsx
+     apps/web/src/styles.css
+   (In VS Code: drag-and-drop the files from this folder's
+   apps/web/src/ into your project's apps/web/src/, choose
+   "Replace" when prompted.)
+
+3. Test locally:
+     npm run dev
+   Open the app, resize your browser to a phone width (or use
+   Chrome DevTools device toolbar) and confirm the lobby and
+   results pages scroll.
+
+4. Commit and push:
+     git add apps/web/src/main.tsx apps/web/src/styles.css
+     git commit -m "Fix mobile scrolling on lobby/results pages; lock Blind Auction"
+     git push
+
+DEPLOYING
+---------
+- Vercel (web app): if it's connected to your GitHub repo, pushing
+  to your main branch auto-deploys — no extra command needed. If you
+  deploy manually instead, run:
+     vercel --prod
+  from the apps/web folder (or your usual deploy command).
+
+- Render (server): the server code (apps/server) was NOT changed in
+  this fix, so no redeploy is needed there unless you want to be
+  safe — in that case just trigger a redeploy from the Render
+  dashboard ("Manual Deploy" > "Deploy latest commit").
+
+NOTES
+-----
+- I did NOT touch the Formation/team-setup page in this pass since
+  it has delicate drag-and-drop logic I can't test live. If it also
+  doesn't scroll on mobile, tell me and I'll apply the same fix there.
+- If after deploying the lobby/results pages still don't scroll on a
+  real phone, it's worth checking whether your phone browser has any
+  extensions/reader mode active, and clearing the site cache (old
+  cached CSS/JS can look like the fix "didn't work").

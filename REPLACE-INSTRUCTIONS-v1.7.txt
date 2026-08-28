@@ -1,0 +1,20 @@
+AUCTION ELEVEN v1.7 REPLACEMENT INSTRUCTIONS
+
+1. Extract this ZIP into:
+   C:\Auction\auction-eleven
+
+2. Choose "Replace the files in the destination".
+
+3. Run:
+   cd C:\Auction\auction-eleven
+   npm install
+   npm run typecheck
+   npm test
+   npm run build
+
+4. If all pass, commit and push:
+   git add packages/shared/src/index.ts apps/server/src/index.ts apps/server/src/roomManager.ts apps/server/test/roomFlow.test.ts apps/web/src/main.tsx apps/web/src/styles.css
+   git commit -m "Fix instant pass sales and smooth formation dragging"
+   git push origin main
+
+Both Render and Vercel should redeploy because backend/shared/frontend code changed.

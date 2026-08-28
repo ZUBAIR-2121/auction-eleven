@@ -1,0 +1,23 @@
+AUCTION ELEVEN v2.0.3 — RESULTS / AWARDS MOBILE SCROLL FIX
+
+Replace these complete files in your project:
+
+apps/web/src/main.tsx
+apps/web/src/styles.css
+
+Project path example:
+C:\Auction\auction-eleven
+
+After replacement run:
+
+npm run typecheck
+npm test
+npm run build
+
+Then, only if all checks pass:
+
+git add apps/web/src/main.tsx apps/web/src/styles.css
+git commit -m "Fix results awards scrolling on mobile"
+git push origin main
+
+No backend/shared/database/environment-variable changes are required.

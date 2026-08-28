@@ -1,0 +1,24 @@
+AUCTION ELEVEN v1.6 — REPLACEMENT INSTRUCTIONS
+
+1. Back up your current project folder.
+2. Extract this ZIP directly into:
+   C:\Auction\auction-eleven
+3. Choose "Replace the files in the destination".
+4. Do NOT delete or replace your .env files.
+5. In PowerShell run:
+
+   cd C:\Auction\auction-eleven
+   npm install
+   npm run typecheck
+   npm test
+   npm run build
+
+6. Only if all commands succeed, deploy:
+
+   git add packages/shared/src/index.ts apps/server/src/footballers.ts apps/server/src/gameEngine.ts apps/server/src/roomManager.ts apps/server/src/index.ts apps/server/test/footballers.test.ts apps/server/test/gameEngine.test.ts apps/server/test/roomFlow.test.ts apps/web/src/main.tsx apps/web/src/styles.css
+   git commit -m "Add icon player pools private budgets and saved manager name"
+   git push origin main
+
+Both Render and Vercel need to redeploy because this version changes shared types, server state/privacy logic and frontend UI.
+
+No new environment variables, database, Redis instance, Render setting or Vercel setting is required.

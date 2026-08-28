@@ -1,0 +1,22 @@
+AUCTION ELEVEN v1.9 REPLACEMENT INSTRUCTIONS
+
+1. Back up your current project.
+2. Extract this ZIP into:
+   C:\Auction\auction-eleven
+3. Choose "Replace the files in the destination".
+4. Run:
+
+   cd C:\Auction\auction-eleven
+   npm install
+   npm run typecheck
+   npm test
+   npm run build
+
+5. Only if all checks pass, run:
+
+   git add packages/shared/src/index.ts apps/server/src/gameEngine.ts apps/server/src/roomManager.ts apps/server/test/gameEngine.test.ts apps/server/test/roomFlow.test.ts apps/web/src/main.tsx apps/web/src/styles.css
+   git commit -m "Fix starter based auction completion and optional substitutes"
+   git push origin main
+
+No new environment variables or deployment settings are required.
+Both Render and Vercel need to redeploy because shared, backend, and frontend files changed.

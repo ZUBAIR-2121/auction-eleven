@@ -1,0 +1,20 @@
+AUCTION ELEVEN v2.3.1 - BLIND REVEAL FIX
+
+1. Extract this ZIP into:
+   C:\Auction\auction-eleven
+
+2. Choose Replace files in destination.
+
+3. From PowerShell run:
+   cd C:\Auction\auction-eleven
+   Set-ExecutionPolicy -Scope Process Bypass
+   .\VERIFY-v2.3.1.ps1
+
+4. Do NOT deploy unless npm run typecheck, npm test, and npm run build all pass.
+
+5. Then commit/push:
+   git add packages/shared/src/index.ts apps/server/src/blindReveal.ts apps/server/src/roomManager.ts apps/server/src/index.ts apps/server/test/blindReveal.test.ts apps/server/test/roomFlow.test.ts apps/web/src/main.tsx apps/web/src/styles.css
+   git commit -m "Fix Blind Auction staged image reveal"
+   git push origin main
+
+Both Render and Vercel should redeploy because this update changes shared, server, and web code.

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { getConfiguredSquadSize, getFootballerRoles, getMinimumFootballersRequired, getMinimumNextBid, getOpeningBid, getSquadCompletion, getSquadPositionTargets, getStartingLineupSize } from "@auction-eleven/shared";
+import { BLIND_REVEAL_STAGE_COUNT, getBlindRevealStage, getConfiguredSquadSize, getFootballerRoles, getMinimumFootballersRequired, getMinimumNextBid, getOpeningBid, getSquadCompletion, getSquadPositionTargets, getStartingLineupSize } from "@auction-eleven/shared";
 import type {
   AuctionPoolSizeMode,
   Award,
@@ -728,9 +728,26 @@ export class RoomManager {
     room.blindTimers = [];
   }
 
-  private blindRevealImageUrl(room: InternalRoom): string {
+  private blindRevealAssetBaseUrl(room: InternalRoom): string {
     if (!room.blindAssetToken) return "";
-    return `/api/blind-stage/${encodeURIComponent(room.blindAssetToken)}/${room.blindRevealStage}.webp`;
+    return `/api/blind-stage/${encodeURIComponent(room.blindAssetToken)}`;
+  }
+
+  private currentBlindRevealStage(room: InternalRoom, now = Date.now()): 0 | 1 | 2 | 3 | 4 | 5 {
+    if (room.blindStatus !== "guessing") return 5;
+    if (!room.blindStartedAt || !room.endsAt) return 0;
+    return getBlindRevealStage({
+      now,
+      startedAt: room.blindStartedAt,
+      endsAt: room.endsAt,
+      stageCount: BLIND_REVEAL_STAGE_COUNT,
+      difficulty: room.settings.blindDifficulty
+    });
+  }
+
+  private blindRevealImageUrl(room: InternalRoom, stage = this.currentBlindRevealStage(room)): string {
+    const base = this.blindRevealAssetBaseUrl(room);
+    return base ? `${base}/${stage}.webp` : "";
   }
 
   private blindCluesFor(room: InternalRoom, footballer: Footballer, stage: number): BlindClue[] {
@@ -754,15 +771,25 @@ export class RoomManager {
 
   private blindPublicState(room: InternalRoom) {
     if (room.settings.gameMode !== "blind" || !room.blindStatus || !room.currentFootballer || !room.blindStartedAt) return null;
+    const serverNow = Date.now();
+    const revealStage = this.currentBlindRevealStage(room, serverNow);
     const revealed = room.blindStatus !== "guessing";
+    const clues = this.blindCluesFor(room, room.currentFootballer, revealStage);
+    // Keep the internal snapshot aligned for diagnostics/legacy code, while
+    // authoritative reveal progress comes from startedAt/endsAt.
+    room.blindRevealStage = revealStage;
+    room.blindClues = clues;
     return {
       blindRoundId: room.roundId,
       status: room.blindStatus,
-      revealStage: room.blindRevealStage,
-      revealImageUrl: this.blindRevealImageUrl(room),
+      revealStage,
+      revealStageCount: BLIND_REVEAL_STAGE_COUNT,
+      revealImageUrl: this.blindRevealImageUrl(room, revealStage),
+      revealAssetBaseUrl: this.blindRevealAssetBaseUrl(room),
+      serverNow,
       startedAt: room.blindStartedAt,
       endsAt: room.endsAt,
-      clues: room.blindClues,
+      clues,
       revealedFootballer: revealed ? room.currentFootballer : null,
       winnerManagerId: room.blindWinnerManagerId,
       winnerManagerName: room.blindWinnerManagerName,
@@ -774,7 +801,7 @@ export class RoomManager {
     const stage = Math.max(0, Math.min(5, Math.round(stageInput)));
     for (const room of this.rooms.values()) {
       if (!room.blindAssetToken || room.blindAssetToken !== assetToken || !room.currentFootballer) continue;
-      const maxStage = room.blindStatus === "guessing" ? room.blindRevealStage : 5;
+      const maxStage = this.currentBlindRevealStage(room);
       if (stage > maxStage) throw new Error("That reveal stage is not available yet.");
       return room.currentFootballer;
     }
@@ -1426,8 +1453,11 @@ export class RoomManager {
       const timer = this.safeTimer(room, `blind_reveal_stage_${stage}`, () => {
         const latest = this.rooms.get(room.code);
         if (!latest || latest.roundId !== roundId || latest.phase !== "auction" || latest.blindStatus !== "guessing" || !latest.currentFootballer) return;
-        latest.blindRevealStage = stage;
-        latest.blindClues = this.blindCluesFor(latest, latest.currentFootballer, stage);
+        const currentStage = this.currentBlindRevealStage(latest);
+        // These broadcasts keep clues/status fresh, but the image reveal no
+        // longer depends on receiving every one of them.
+        latest.blindRevealStage = currentStage;
+        latest.blindClues = this.blindCluesFor(latest, latest.currentFootballer, currentStage);
         this.broadcast(latest);
       }, Math.round(duration * fraction));
       room.blindTimers.push(timer);
@@ -1696,6 +1726,10 @@ export class RoomManager {
       return { result: "round_finished", message: "That Blind Auction round has already ended." };
     }
     if (!room.currentFootballer) return { result: "round_finished", message: "Waiting for the next mystery footballer." };
+    if (room.endsAt !== null && Date.now() >= room.endsAt) {
+      this.handleBlindTimeout(room.code, room.roundId);
+      return { result: "round_finished", message: "That Blind Auction round has already ended." };
+    }
     if (manager.isBot) throw new Error("AI managers do not receive hidden footballer identities in Blind Auction.");
     if (!manager.connected) throw new Error("Reconnect before submitting another guess.");
     if (manager.auctionComplete) throw new Error("You already finished participating in this auction.");

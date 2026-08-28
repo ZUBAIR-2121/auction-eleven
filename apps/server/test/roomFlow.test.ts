@@ -1107,5 +1107,69 @@ describe("v2.3 Blind Auction", () => {
       expect(state.lastWinner).toBeNull();
     } finally { vi.clearAllTimers(); vi.useRealTimers(); }
   });
+  it("derives the current reveal stage from time even when stage broadcasts are missed", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-16T12:00:00Z"));
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const { host } = startTwoHumanBlind(manager, "TimedStage");
+      const unsafe = manager as unknown as BlindUnsafeRoomManager;
+      const room = unsafe.rooms.get(host.code)!;
+      const initial = manager.getState(host.code, host.managerId);
+      const startedAt = initial.blindRound!.startedAt;
+      const endsAt = initial.blindRound!.endsAt!;
+      const duration = endsAt - startedAt;
+      expect(initial.blindRound?.revealStage).toBe(0);
+
+      // setSystemTime changes Date.now without executing the scheduled stage
+      // callbacks, proving public reveal state is timestamp-derived.
+      vi.setSystemTime(startedAt + Math.round(duration * .45));
+      let state = manager.getState(host.code, host.managerId);
+      expect(state.blindRound?.revealStage).toBe(2);
+      expect(manager.getBlindRevealFootballer(room.blindAssetToken!, 2).id).toBe(room.currentFootballer!.id);
+      expect(() => manager.getBlindRevealFootballer(room.blindAssetToken!, 3)).toThrow(/not available yet/i);
+
+      vi.setSystemTime(startedAt + Math.round(duration * .80));
+      state = manager.getState(host.code, host.managerId);
+      expect(state.blindRound?.revealStage).toBe(4);
+      expect(manager.getBlindRevealFootballer(room.blindAssetToken!, 4).id).toBe(room.currentFootballer!.id);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("restores the correct reveal stage after reconnect instead of restarting at stage zero", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-16T12:05:00Z"));
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const { host } = startTwoHumanBlind(manager, "ReconnectStage");
+      const first = manager.getState(host.code, host.managerId).blindRound!;
+      const duration = first.endsAt! - first.startedAt;
+      vi.setSystemTime(first.startedAt + Math.round(duration * .65));
+      manager.disconnect("socket-blind-host-ReconnectStage");
+      manager.resume(host.code, "session-blind-host-ReconnectStage", "socket-blind-host-ReconnectStage-returned");
+      const restored = manager.getState(host.code, host.managerId);
+      expect(restored.blindRound?.blindRoundId).toBe(first.blindRoundId);
+      expect(restored.blindRound?.revealStage).toBe(3);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("rejects a guess received after the authoritative Blind round deadline", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-16T12:10:00Z"));
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const { host } = startTwoHumanBlind(manager, "ExpiredGuess");
+      const unsafe = manager as unknown as BlindUnsafeRoomManager;
+      const hidden = unsafe.rooms.get(host.code)!.currentFootballer!;
+      const blind = manager.getState(host.code, host.managerId).blindRound!;
+      vi.setSystemTime(blind.endsAt! + 1);
+      const response = manager.submitBlindGuess(host.code, host.managerId, "guess-after-end", blind.blindRoundId, hidden.name);
+      expect(response.result).toBe("round_finished");
+      const state = manager.getState(host.code, host.managerId);
+      expect(state.blindRound?.status).toBe("revealed");
+      expect(state.blindRound?.revealStage).toBe(5);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
 });
 

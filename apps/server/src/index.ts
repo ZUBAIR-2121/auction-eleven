@@ -45,9 +45,14 @@ app.get("/api/blind-stage/:token/:stage.webp",async(req,res)=>{
   try{
     const player=rooms.getBlindRevealFootballer(req.params.token,stage);
     const image=await renderBlindRevealStage(player,stage);
-    res.set("Cache-Control","private, no-store");
+    // The opaque token is unique to one Blind round. Once a stage is legally
+    // available it is safe to cache that transformed asset locally, while
+    // future stages remain protected by RoomManager authorization.
+    res.set("Cache-Control","private, max-age=300, immutable");
+    res.set("X-Content-Type-Options","nosniff");
     res.type(image.contentType).send(image.buffer);
   }catch(error){
+    res.set("Cache-Control","no-store");
     res.status(404).json({error:error instanceof Error?error.message:"Reveal image is unavailable."});
   }
 });

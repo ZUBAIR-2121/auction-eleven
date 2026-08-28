@@ -18,6 +18,47 @@ export type BlindNoGuessMode = "quick_auction" | "skip";
 export type BlindGuessResultCode = "correct" | "incorrect" | "ambiguous" | "rate_limited" | "round_finished";
 export const MAX_SUBSTITUTES = 10;
 
+export const BLIND_REVEAL_STAGE_COUNT = 6 as const;
+
+export interface BlindRevealTiming {
+  now: number;
+  startedAt: number;
+  endsAt: number;
+  stageCount?: number;
+  difficulty?: BlindDifficulty;
+}
+
+/**
+ * Deterministic Blind Auction reveal stage derived from authoritative server
+ * timestamps. Stages 0-4 are progressively obscured; stage 5 is the clear
+ * reveal and is only reached once the round end time has passed.
+ */
+export function getBlindRevealStage({
+  now,
+  startedAt,
+  endsAt,
+  stageCount = BLIND_REVEAL_STAGE_COUNT,
+  difficulty = "normal"
+}: BlindRevealTiming): 0 | 1 | 2 | 3 | 4 | 5 {
+  const count = Math.max(2, Math.min(BLIND_REVEAL_STAGE_COUNT, Math.round(stageCount)));
+  if (!Number.isFinite(now) || !Number.isFinite(startedAt) || !Number.isFinite(endsAt) || endsAt <= startedAt) return 0;
+  if (now >= endsAt) return (count - 1) as 0 | 1 | 2 | 3 | 4 | 5;
+  if (now <= startedAt) return 0;
+
+  const progress = Math.max(0, Math.min(.999999, (now - startedAt) / (endsAt - startedAt)));
+  const thresholds = difficulty === "easy"
+    ? [.14, .30, .46, .64]
+    : difficulty === "hard"
+      ? [.30, .52, .70, .86]
+      : [.20, .40, .58, .76];
+
+  let stage = 0;
+  for (let index = 0; index < Math.min(thresholds.length, count - 2); index++) {
+    if (progress >= thresholds[index]!) stage = index + 1;
+  }
+  return Math.min(stage, count - 2) as 0 | 1 | 2 | 3 | 4 | 5;
+}
+
 /**
  * Normalizes a typed Blind Auction answer without changing the displayed
  * footballer name. This intentionally removes accents and harmless punctuation
@@ -469,8 +510,15 @@ export interface BlindClue {
 export interface BlindRoundPublicState {
   blindRoundId: string;
   status: "guessing" | "won" | "revealed" | "quick_auction";
+  /** Snapshot stage for older clients; modern clients also derive it from timestamps. */
   revealStage: 0 | 1 | 2 | 3 | 4 | 5;
+  revealStageCount: number;
+  /** Exact currently permitted stage URL for backwards compatibility. */
   revealImageUrl: string;
+  /** Opaque protected endpoint prefix; append /<stage>.webp. */
+  revealAssetBaseUrl: string;
+  /** Server clock sample used by clients to compensate for device clock skew. */
+  serverNow: number;
   startedAt: number;
   endsAt: number | null;
   clues: BlindClue[];

@@ -1,0 +1,38 @@
+AUCTION ELEVEN v2.0 STRATEGIC AI UPGRADE
+
+Copy this folder's files into the matching paths inside:
+C:\Auction\auction-eleven
+
+Replace existing files when Windows asks.
+
+Files:
+apps/server/package.json
+apps/server/src/roomManager.ts
+apps/server/src/ai/botEngine.ts
+apps/server/src/ai/simulations.ts
+apps/server/src/ai/tournament.ts
+apps/server/test/botEngine.test.ts
+apps/server/test/roomFlow.test.ts
+
+Then run:
+
+cd C:\Auction\auction-eleven
+npm install
+npm run typecheck
+npm test
+npm run build
+npm run ai:tournament -w @auction-eleven/server -- 100
+
+Only push after typecheck, tests and build succeed.
+
+Git commands:
+
+git add apps/server/package.json apps/server/src/roomManager.ts apps/server/src/ai/botEngine.ts apps/server/src/ai/simulations.ts apps/server/src/ai/tournament.ts apps/server/test/botEngine.test.ts apps/server/test/roomFlow.test.ts
+
+git commit -m "Upgrade bots with strategic auction intelligence"
+
+git push origin main
+
+No required Render/Vercel environment variable or deployment setting changes.
+Optional local-only AI debug logging:
+AUCTION_ELEVEN_AI_DEBUG=1 with NODE_ENV not set to production.

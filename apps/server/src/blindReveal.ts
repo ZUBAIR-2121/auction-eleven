@@ -1,4 +1,4 @@
-import type { Footballer } from "@auction-eleven/shared";
+import type { Footballer, FootballerPhoto } from "@auction-eleven/shared";
 import { getFootballerPhoto } from "./photoResolver.js";
 
 export interface BlindRevealAsset {
@@ -12,51 +12,105 @@ function identity(player: Footballer): string {
   return player.canonicalId ?? player.catalogId ?? player.id;
 }
 
-function thumbnailAtWidth(url: string, width: number): string | null {
-  // Wikimedia Commons thumb URLs end in /<width>px-<filename>. Re-requesting
-  // a smaller server-generated thumbnail means the clear pixels never reach
-  // the browser during early Blind stages.
-  const match = url.match(/^(.*\/thumb\/.*\/)(\d+)px-([^/]+)$/i);
-  if (!match) return null;
-  return `${match[1]}${width}px-${match[3]}`;
+/**
+ * Builds a Wikimedia thumbnail URL without relying on the exact thumb URL
+ * shape returned by the API. This fixes early stages falling back to the same
+ * generic silhouette when a photo URL was an original file URL or had a
+ * slightly different thumbnail path.
+ */
+export function buildWikimediaThumbnailUrl(photo: Pick<FootballerPhoto, "url" | "originalUrl">, width: number): string | null {
+  const safeWidth = Math.max(8, Math.min(720, Math.round(width)));
+
+  try {
+    const existing = new URL(photo.url);
+    if (existing.hostname === "upload.wikimedia.org" && existing.pathname.includes("/thumb/")) {
+      const parts = existing.pathname.split("/");
+      const last = parts.at(-1) ?? "";
+      if (/^\d+px-/i.test(last)) {
+        parts[parts.length - 1] = last.replace(/^\d+px-/i, `${safeWidth}px-`);
+        existing.pathname = parts.join("/");
+        return existing.toString();
+      }
+    }
+  } catch { /* fall through to original-url construction */ }
+
+  try {
+    const original = new URL(photo.originalUrl);
+    if (original.hostname !== "upload.wikimedia.org") return null;
+    const marker = "/wikipedia/commons/";
+    const index = original.pathname.indexOf(marker);
+    if (index < 0) return null;
+    const rest = original.pathname.slice(index + marker.length);
+    const filename = rest.split("/").at(-1);
+    if (!filename) return null;
+    const renderedSuffix = /\.svg$/i.test(filename) ? ".png" : "";
+    original.pathname = `${marker}thumb/${rest}/${safeWidth}px-${filename}${renderedSuffix}`;
+    original.search = "";
+    original.hash = "";
+    return original.toString();
+  } catch {
+    return null;
+  }
 }
 
 function fallbackSvg(stage: number): BlindRevealAsset {
-  const opacity = [.96, .9, .82, .7, .55, .18][stage] ?? .9;
-  const svg = `<svg width="420" height="520" viewBox="0 0 420 520" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#06110b"/><stop offset="1" stop-color="#143521"/></linearGradient></defs><rect width="420" height="520" rx="28" fill="url(#g)"/><circle cx="210" cy="180" r="78" fill="#274b36" opacity="${opacity}"/><path d="M78 482c16-124 90-184 132-184s116 60 132 184" fill="#274b36" opacity="${opacity}"/><text x="210" y="500" text-anchor="middle" font-family="Arial,sans-serif" font-size="17" fill="#8cff54">MYSTERY PLAYER</text></svg>`;
+  const safeStage = Math.max(0, Math.min(5, Math.round(stage)));
+  const radius = [34, 28, 21, 14, 7, 0][safeStage] ?? 28;
+  const opacity = [.98, .92, .82, .68, .48, .18][safeStage] ?? .9;
+  const svg = `<svg width="420" height="520" viewBox="0 0 420 520" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#06110b"/><stop offset="1" stop-color="#143521"/></linearGradient><filter id="b"><feGaussianBlur stdDeviation="${radius}"/></filter></defs><rect width="420" height="520" rx="28" fill="url(#g)"/><g filter="url(#b)" opacity="${opacity}"><circle cx="210" cy="180" r="78" fill="#315a42"/><path d="M78 482c16-124 90-184 132-184s116 60 132 184" fill="#315a42"/></g><text x="210" y="500" text-anchor="middle" font-family="Arial,sans-serif" font-size="17" fill="#8cff54">MYSTERY PLAYER</text></svg>`;
   return { buffer: Buffer.from(svg), contentType: "image/svg+xml" };
 }
 
 /**
- * Returns only the raster resolution allowed for the current reveal stage.
- * Early stages are genuine low-resolution Wikimedia thumbnails fetched by the
- * trusted server, not a clear image hidden with client-side CSS.
+ * Returns only the raster resolution legally available for the requested
+ * reveal stage. The clear source URL is never sent to the browser before the
+ * server authorizes stage 5.
  */
 export async function renderBlindRevealStage(player: Footballer, stageInput: number): Promise<BlindRevealAsset> {
   const stage = Math.max(0, Math.min(5, Math.round(stageInput)));
   const key = `${identity(player)}:${stage}`;
-  let pending = assetCache.get(key);
-  if (!pending) {
-    pending = (async () => {
-      try {
-        const photo = await getFootballerPhoto(player);
-        const widths = [18, 28, 46, 76, 150, 720];
-        const sourceUrl = stage === 5 ? photo.url : thumbnailAtWidth(photo.url, widths[stage]!);
-        if (!sourceUrl) return fallbackSvg(stage);
-        const response = await fetch(sourceUrl, { signal: AbortSignal.timeout(12_000) });
-        if (!response.ok) return fallbackSvg(stage);
-        const contentType = response.headers.get("content-type") || "image/jpeg";
-        return { buffer: Buffer.from(await response.arrayBuffer()), contentType };
-      } catch {
-        return fallbackSvg(stage);
+  const cached = assetCache.get(key);
+  if (cached) return cached;
+
+  const pending = (async () => {
+    try {
+      const photo = await getFootballerPhoto(player);
+      // Meaningfully different source resolutions. The browser receives only
+      // these reduced pixels, rather than a clear image hidden with CSS.
+      const widths = [14, 24, 42, 76, 150, 720] as const;
+      const sourceUrl = stage === 5 ? photo.url : buildWikimediaThumbnailUrl(photo, widths[stage]!);
+      if (!sourceUrl) return fallbackSvg(stage);
+
+      const response = await fetch(sourceUrl, {
+        headers: { Accept: "image/avif,image/webp,image/*,*/*;q=0.8" },
+        signal: AbortSignal.timeout(12_000)
+      });
+      if (!response.ok) return fallbackSvg(stage);
+      const contentLength = Number(response.headers.get("content-length") ?? 0);
+      if (contentLength > 8_000_000) return fallbackSvg(stage);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (!buffer.length || buffer.length > 8_000_000) return fallbackSvg(stage);
+      return {
+        buffer,
+        contentType: response.headers.get("content-type") || "image/jpeg"
+      };
+    } catch (error) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(JSON.stringify({
+          level: "warn",
+          event: "blind_reveal_asset_fallback",
+          playerId: identity(player),
+          stage,
+          message: error instanceof Error ? error.message : "Unknown image error"
+        }));
       }
-    })();
-    assetCache.set(key, pending);
-  }
-  try {
-    return await pending;
-  } catch (error) {
+      return fallbackSvg(stage);
+    }
+  })().catch(error => {
     assetCache.delete(key);
     throw error;
-  }
+  });
+
+  assetCache.set(key, pending);
+  return pending;
 }

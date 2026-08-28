@@ -1,0 +1,18 @@
+AUCTION ELEVEN v2.0.1 TEST REGRESSION FIX
+
+1. Extract this ZIP into C:\Auction\auction-eleven
+2. Choose Replace the files in the destination.
+3. Run:
+
+   cd C:\Auction\auction-eleven
+   npm run typecheck
+   npm test
+   npm run build
+
+4. If all pass:
+
+   git add apps/server/test/roomFlow.test.ts
+   git commit -m "Fix v2 test regression fixtures"
+   git push origin main
+
+No production source code changed in this patch.

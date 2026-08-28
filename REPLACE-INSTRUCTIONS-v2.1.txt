@@ -1,0 +1,26 @@
+AUCTION ELEVEN v2.1 — MOBILE COMFORT + LEGENDARY TAKEOVER
+
+1. Extract this ZIP directly into:
+   C:\Auction\auction-eleven
+
+2. Choose Replace files in destination.
+
+3. Do NOT delete .env files.
+
+4. Verify from PowerShell:
+   cd C:\Auction\auction-eleven
+   npm run typecheck
+   npm test
+   npm run build
+
+   IMPORTANT: These are three commands. Do not type them as one npm command.
+
+   Or run:
+   powershell -ExecutionPolicy Bypass -File .\VERIFY-v2.1.ps1
+
+5. Only push if all three checks pass.
+
+Git commands:
+   git add packages/shared/src/index.ts apps/server/src/roomManager.ts apps/server/test/gameEngine.test.ts apps/server/test/roomFlow.test.ts apps/web/src/main.tsx apps/web/src/styles.css
+   git commit -m "Add compact mobile auction and Legendary disconnect takeover"
+   git push origin main

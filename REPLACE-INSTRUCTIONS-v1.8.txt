@@ -1,0 +1,34 @@
+AUCTION ELEVEN v1.8 — REPLACEMENT INSTRUCTIONS
+
+1. Extract this ZIP into:
+   C:\Auction\auction-eleven
+
+2. Choose "Replace the files in the destination".
+
+3. Run:
+   cd C:\Auction\auction-eleven
+   npm install
+   npm run typecheck
+   npm test
+   npm run build
+
+4. Do NOT push if typecheck, tests, or build fail.
+
+5. After all three succeed:
+   git add packages/shared/src/index.ts apps/server/src/footballers.ts apps/server/src/gameEngine.ts apps/server/src/roomManager.ts apps/server/test/footballers.test.ts apps/server/test/roomFlow.test.ts apps/web/src/main.tsx apps/web/src/styles.css
+   git commit -m "Fix player pools custom selection and dual primary positions"
+   git push origin main
+
+Both Render and Vercel should redeploy because backend/shared and frontend files changed.
+
+FILES IN THIS UPDATE
+- packages/shared/src/index.ts
+- apps/server/src/footballers.ts
+- apps/server/src/gameEngine.ts
+- apps/server/src/roomManager.ts
+- apps/server/test/footballers.test.ts
+- apps/server/test/roomFlow.test.ts
+- apps/web/src/main.tsx
+- apps/web/src/styles.css
+- FIX-v1.8.md
+- REPLACE-INSTRUCTIONS-v1.8.txt

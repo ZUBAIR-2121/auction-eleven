@@ -1,0 +1,40 @@
+AUCTION ELEVEN v1.5 — CRITICAL STABILITY & PERFORMANCE FIX
+==========================================================
+
+1. Make a backup of your current project.
+2. Extract this ZIP into:
+   C:\Auction\auction-eleven
+3. Choose "Replace the files in the destination".
+4. DO NOT delete your .env files.
+5. From PowerShell run:
+
+   cd C:\Auction\auction-eleven
+   npm install
+   npm run typecheck
+   npm test
+   npm run build
+
+6. Only deploy if all commands succeed on your machine.
+7. Commit and push:
+
+   git add packages/shared/src/index.ts apps/server/src/footballers.ts apps/server/src/gameEngine.ts apps/server/src/roomManager.ts apps/server/src/index.ts apps/server/test/gameEngine.test.ts apps/server/test/roomFlow.test.ts apps/web/src/main.tsx apps/web/src/styles.css apps/web/src/assets
+   git commit -m "Fix multiplayer capacity navigation stability and performance"
+   git push origin main
+
+IMPORTANT
+---------
+This package changes shared socket/state types, the backend room/auction engine,
+and the frontend. Render and Vercel must both redeploy.
+
+No new environment variables, databases, Redis service, or deployment commands are required.
+
+Verification performed before packaging:
+- npm run typecheck: PASSED for shared/server/web.
+- Custom runtime checks: PASSED for 2–8 manager viable configurations,
+  exact 3 x (11+5) = 48 calculation, skipped-player non-repeat,
+  sold-player non-repeat/idempotent transition, duplicate-session recovery,
+  stale-tab protection, and clear impossible-configuration errors.
+- npm test / npm run build could not start inside the Linux packaging sandbox because
+  the supplied node_modules contains Windows Rollup native packages and is missing
+  @rollup/rollup-linux-x64-gnu. This is an environment dependency mismatch, not a
+  TypeScript error. Run both commands on your Windows project before deployment.

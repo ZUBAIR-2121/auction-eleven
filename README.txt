@@ -1,44 +1,35 @@
-AUCTION ELEVEN — DRAGGABLE CHAT BUBBLE
-========================================
+AUCTION ELEVEN — DRAGGABLE CHAT BUBBLE (v2 — fix)
+=====================================================
 
-WHAT'S IN THIS FOLDER
-----------------------
-Same 2 files as before, updated further:
-  apps/web/src/main.tsx
-  apps/web/src/styles.css
+WHAT WAS WRONG WITH v1
+------------------------
+The first attempt used a manual "start drag on pointer-down" trick
+that broke normal tap-to-open on both PC and mobile, and limited how
+far it could actually be dragged.
 
-WHAT CHANGED
-------------
-The chat bubble (💬) in the bottom-right corner can now be:
-  - Dragged anywhere on screen (grab it and move it).
-  - Tapped normally to open/close the chat (a small tap still opens
-    it — only a real drag moves it, so nothing breaks).
-  - Double-clicked/double-tapped to snap it back to its original
-    position, if it ends up somewhere awkward.
-
-Its position is saved (per device/browser) so it stays where you put
-it the next time you open the app.
-
-It's constrained so you can't drag it off-screen or lose it behind
-other UI.
+WHAT CHANGED IN THIS FIX
+--------------------------
+Switched to Framer Motion's standard, built-in drag pattern instead
+of a manual one:
+  - A plain tap/click on the bubble opens/closes chat, same as
+    before you ever asked for dragging — this now works reliably on
+    both PC and mobile again.
+  - Pressing and actually moving your finger/mouse drags the bubble
+    freely around the screen.
+  - The chat window (when open) moves together with the bubble.
+  - Double-click/double-tap resets it to the default corner.
+  - Its position is remembered across reloads.
 
 HOW TO APPLY
 ------------
 1. Copy the two files into your project, overwriting the originals:
      apps/web/src/main.tsx
      apps/web/src/styles.css
-2. Test locally: npm run dev — try dragging the chat bubble around,
-   then reload the page and confirm it stays where you left it.
+2. Test locally: npm run dev
+   - Click/tap the bubble normally — chat should open/close.
+   - Press and drag it — it should move and stay wherever you drop
+     it, on both a mouse and a touch/mobile-emulated view.
 3. Commit and push:
      git add -A
-     git commit -m "Make chat bubble draggable and repositionable"
+     git commit -m "Fix draggable chat bubble: restore tap-to-open, fix drag range"
      git push
-
-NOTES
------
-- The chat WINDOW itself (when open) is not separately draggable —
-  it opens anchored near wherever you've moved the bubble to, which
-  is the intended behavior since they move together.
-- If you'd rather it NOT remember position across reloads (always
-  reset to the default spot each time), tell me and I'll remove the
-  save/restore part — it's a one-line change.

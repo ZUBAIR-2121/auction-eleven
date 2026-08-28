@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AnimatePresence, motion, useMotionValue, useDragControls } from "framer-motion";
+import { AnimatePresence, motion, useMotionValue } from "framer-motion";
 import gsap from "gsap";
 import { io, type Socket } from "socket.io-client";
 import {
@@ -1764,7 +1764,6 @@ function RoomChat({ socket, state, managerId, setError }: { socket: GameSocket; 
   const closeChat = useBackClosable(open, () => setOpen(false), "room-chat");
   const chatX = useMotionValue(0);
   const chatY = useMotionValue(0);
-  const dragControls = useDragControls();
   useEffect(() => {
     try {
       const saved = localStorage.getItem("ae-chat-offset");
@@ -1775,14 +1774,7 @@ function RoomChat({ socket, state, managerId, setError }: { socket: GameSocket; 
       }
     } catch { /* ignore malformed/missing saved position */ }
   }, []);
-  const dragMargin = 90;
-  const dragConstraints = { left: -(window.innerWidth - dragMargin), right: 8, top: -(window.innerHeight - 150), bottom: 8 };
-  const handleChatDragEnd = (_event: unknown, info: { offset: { x: number; y: number } }) => {
-    const moved = Math.hypot(info.offset.x, info.offset.y);
-    if (moved < 5) {
-      open ? closeChat() : setOpen(true);
-      return;
-    }
+  const persistChatPosition = () => {
     try { localStorage.setItem("ae-chat-offset", JSON.stringify({ x: chatX.get(), y: chatY.get() })); } catch { /* storage unavailable */ }
   };
   const resetChatPosition = () => {
@@ -1790,6 +1782,8 @@ function RoomChat({ socket, state, managerId, setError }: { socket: GameSocket; 
     chatY.set(0);
     try { localStorage.removeItem("ae-chat-offset"); } catch { /* storage unavailable */ }
   };
+  const dragMargin = 90;
+  const dragConstraints = { left: -(window.innerWidth - dragMargin), right: 8, top: -(window.innerHeight - 150), bottom: 8 };
   const [draft, setDraft] = useState("");
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [typingNames, setTypingNames] = useState<string[]>([]);
@@ -1865,8 +1859,8 @@ function RoomChat({ socket, state, managerId, setError }: { socket: GameSocket; 
     }, 0);
   };
 
-  return <motion.div className={`room-chat phase-${state.phase} ${open ? "open" : ""}`} drag dragListener={false} dragControls={dragControls} dragConstraints={dragConstraints} dragElastic={0.05} dragMomentum={false} onDragEnd={handleChatDragEnd} style={{ x: chatX, y: chatY }}>
-    {open && <section className="chat-window" aria-label="Room chat">
+  return <div className={`room-chat phase-${state.phase} ${open ? "open" : ""}`}>
+    {open && <motion.section className="chat-window" style={{ x: chatX, y: chatY }} aria-label="Room chat">
       <header><div><span>ROOM CHAT</span><strong>Auction Eleven</strong></div><div className="chat-online"><i />{state.managers.filter(manager => manager.connected).length} online</div><button aria-label="Close chat" onClick={() => { setEmojiOpen(false); closeChat(); }}>×</button></header>
       <div className="chat-messages" aria-live="polite">{messages.length === 0 ? <div className="chat-empty"><span>💬</span><b>Start the room conversation</b><p>Use the full keyboard, press Enter to send, or add an emoji.</p></div> : messages.map(message => {
         const own = message.managerId === managerId;
@@ -1876,9 +1870,9 @@ function RoomChat({ socket, state, managerId, setError }: { socket: GameSocket; 
       {emojiOpen && <div className="emoji-picker" role="toolbar" aria-label="Emoji picker">{CHAT_EMOJIS.map(emoji => <button type="button" onClick={() => addEmoji(emoji)} aria-label={`Add ${emoji}`} key={emoji}>{emoji}</button>)}</div>}
       <footer><button className={`emoji-toggle ${emojiOpen ? "active" : ""}`} aria-label="Toggle emoji picker" onClick={() => setEmojiOpen(value => !value)}>☺</button><textarea ref={textareaRef} rows={1} maxLength={300} value={draft} onChange={event => notifyTyping(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); } else if (event.key === "Escape") { setEmojiOpen(false); } }} placeholder="Type a message" aria-label="Chat message" /><button className="chat-send" aria-label="Send message" disabled={!draft.trim()} onClick={send}>➤</button></footer>
       <div className="chat-hint"><span>Enter to send</span><span>Shift + Enter for a new line</span><b>{draft.length}/300</b></div>
-    </section>}
-    <button className="chat-launcher" aria-label={open ? "Close room chat" : "Open room chat"} style={{ touchAction: "none" }} onPointerDown={event => dragControls.start(event)} onDoubleClick={resetChatPosition} title="Drag to move · double-click to reset position"><span>{open ? "×" : "💬"}</span>{!open && unread > 0 && <b>{Math.min(unread, 99)}</b>}</button>
-  </motion.div>;
+    </motion.section>}
+    <motion.button className="chat-launcher" style={{ x: chatX, y: chatY, touchAction: "none" }} drag dragMomentum={false} dragElastic={0.05} dragConstraints={dragConstraints} onDragEnd={persistChatPosition} onDoubleClick={resetChatPosition} onClick={() => open ? closeChat() : setOpen(true)} aria-label={open ? "Close room chat" : "Open room chat"} title="Drag to move · double-click to reset position"><span>{open ? "×" : "💬"}</span>{!open && unread > 0 && <b>{Math.min(unread, 99)}</b>}</motion.button>
+  </div>;
 }
 
 function Results({ state, managerId, leave }: { state: RoomState; managerId: string; leave: () => void }) {

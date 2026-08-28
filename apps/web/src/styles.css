@@ -3046,3 +3046,52 @@ html[data-ae-performance="performance"] .compact-bid-dock { box-shadow:none!impo
   text-transform: uppercase;
   font-weight: 800;
 }
+
+/* ==========================================================================
+   v4.0 — Design & animation polish pass
+   Additive only: button feedback, entrance keyframes for drag-and-drop
+   cards (pure CSS so it never touches the pointer-drag logic), glow/
+   pulse accents for key game moments. Respects prefers-reduced-motion.
+   ========================================================================== */
+
+/* Global button press feedback (buttons not already handled by Framer Motion) */
+button:not(:disabled) { transition: transform .12s ease, box-shadow .18s ease, filter .18s ease; }
+button:not(:disabled):active { transform: scale(.97); }
+.primary:not(:disabled):hover, .secondary:not(:disabled):hover { filter: brightness(1.08); }
+.primary:not(:disabled):hover { box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 10px 26px -10px rgba(0,229,255,.45); }
+
+/* Formation option buttons: smooth color/scale transition on select */
+.formation-options button { transition: background .25s ease, color .25s ease, transform .15s ease, box-shadow .25s ease; }
+.formation-options button.active { box-shadow: 0 6px 20px -8px rgba(0,229,255,.5); }
+.formation-options button:not(.active):hover { background: rgba(255,255,255,.06); color: #d8d8d8; }
+
+/* Pitch + bench cards: pop-in on mount (fires automatically when React
+   mounts a fresh element — e.g. a player placed in a slot, or a
+   substitute added to the bench). Pure CSS, no JS/drag involvement. */
+@keyframes ae-card-pop {
+  0%   { opacity: 0; transform: scale(.82) translateY(6px); }
+  60%  { opacity: 1; transform: scale(1.035) translateY(0); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+.pitch-player-content, .bench-list > button {
+  animation: ae-card-pop .32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Manager "leading" highlight glow — reinforces the pulse already applied via Framer Motion */
+.manager-line.leading { transition: background .3s ease, box-shadow .3s ease; box-shadow: 0 0 0 1px rgba(255,209,102,.35), 0 6px 18px -8px rgba(255,209,102,.4); }
+
+/* Trophy + podium glow accents */
+.winner-hero .trophy { filter: drop-shadow(0 0 18px rgba(255,209,102,.55)); }
+.podium-place.rank-1 .podium-medal { filter: drop-shadow(0 0 14px rgba(255,209,102,.6)); }
+
+/* Ready tag color transition (pairs with the AnimatePresence swap in JS) */
+.ready-tag { transition: background .25s ease, color .25s ease; }
+
+/* Current bid amount: subtle glow when it updates */
+.compact-current-price strong { text-shadow: 0 0 22px rgba(0,229,255,.35); }
+
+@media (prefers-reduced-motion: reduce) {
+  button:not(:disabled) { transition: none !important; }
+  button:not(:disabled):active { transform: none !important; }
+  .pitch-player-content, .bench-list > button { animation: none !important; }
+}

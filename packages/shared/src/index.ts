@@ -14,6 +14,7 @@ export type RoomAccess = "public" | "password";
 export type GameMode = "normal" | "blind";
 export type BlindDifficulty = "easy" | "normal" | "hard";
 export type BlindClueLevel = "off" | "light" | "normal" | "more";
+export type BlindRevealDirection = "top-down" | "bottom-up" | "left-right" | "right-left";
 export type BlindNoGuessMode = "quick_auction" | "skip";
 export type BlindGuessResultCode = "correct" | "incorrect" | "ambiguous" | "rate_limited" | "round_finished";
 export const MAX_SUBSTITUTES = 10;
@@ -57,6 +58,19 @@ export function getBlindRevealStage({
     if (progress >= thresholds[index]!) stage = index + 1;
   }
   return Math.min(stage, count - 2) as 0 | 1 | 2 | 3 | 4 | 5;
+}
+
+/**
+ * Continuous 0-1 reveal progress for the directional wipe animation. Uses the
+ * same authoritative timestamps as getBlindRevealStage so the wipe and the
+ * underlying staged image always agree, and both recover cleanly after a
+ * missed broadcast, a reconnect, or a backgrounded tab.
+ */
+export function getBlindWipeProgress({ now, startedAt, endsAt }: { now: number; startedAt: number; endsAt: number }): number {
+  if (!Number.isFinite(now) || !Number.isFinite(startedAt) || !Number.isFinite(endsAt) || endsAt <= startedAt) return 0;
+  if (now >= endsAt) return 1;
+  if (now <= startedAt) return 0;
+  return Math.max(0, Math.min(1, (now - startedAt) / (endsAt - startedAt)));
 }
 
 /**
@@ -341,7 +355,7 @@ export interface BidEntry {
 
 export interface GameSettings {
   gameMode: GameMode;
-  blindRevealSeconds: 10 | 15 | 20 | 30;
+  blindRevealSeconds: 10 | 15 | 20 | 30 | 45;
   blindDifficulty: BlindDifficulty;
   blindClues: BlindClueLevel;
   blindNoGuess: BlindNoGuessMode;
@@ -513,6 +527,8 @@ export interface BlindRoundPublicState {
   /** Snapshot stage for older clients; modern clients also derive it from timestamps. */
   revealStage: 0 | 1 | 2 | 3 | 4 | 5;
   revealStageCount: number;
+  /** Randomly chosen once per round; drives the directional wipe reveal. */
+  revealDirection: BlindRevealDirection;
   /** Exact currently permitted stage URL for backwards compatibility. */
   revealImageUrl: string;
   /** Opaque protected endpoint prefix; append /<stage>.webp. */

@@ -5,6 +5,7 @@ import type {
   Award,
   BlindClue,
   BlindGuessResponse,
+  BlindRevealDirection,
   AuctionStatePatch,
   BidEntry,
   ChatMessage,
@@ -79,6 +80,7 @@ interface InternalRoom extends Omit<RoomState, "managers" | "availableFootballer
   blindTimers: NodeJS.Timeout[];
   blindAssetToken: string | null;
   blindRevealStage: 0 | 1 | 2 | 3 | 4 | 5;
+  blindRevealDirection: BlindRevealDirection;
   blindStatus: "guessing" | "won" | "revealed" | "quick_auction" | null;
   blindStartedAt: number | null;
   blindClues: BlindClue[];
@@ -101,7 +103,7 @@ const poolTargetsSchema = z.object({
 });
 const settingsSchema = z.object({
   gameMode: z.enum(["normal", "blind"]).optional(),
-  blindRevealSeconds: z.union([z.literal(10), z.literal(15), z.literal(20), z.literal(30)]).optional(),
+  blindRevealSeconds: z.union([z.literal(10), z.literal(15), z.literal(20), z.literal(30), z.literal(45)]).optional(),
   blindDifficulty: z.enum(["easy", "normal", "hard"]).optional(),
   blindClues: z.enum(["off", "light", "normal", "more"]).optional(),
   blindNoGuess: z.enum(["quick_auction", "skip"]).optional(),
@@ -723,6 +725,11 @@ export class RoomManager {
     host.ready = true;
   }
 
+  private randomBlindRevealDirection(): BlindRevealDirection {
+    const directions: BlindRevealDirection[] = ["top-down", "bottom-up", "left-right", "right-left"];
+    return directions[Math.floor(Math.random() * directions.length)]!;
+  }
+
   private clearBlindTimers(room: InternalRoom): void {
     room.blindTimers.forEach(clearTimeout);
     room.blindTimers = [];
@@ -784,6 +791,7 @@ export class RoomManager {
       status: room.blindStatus,
       revealStage,
       revealStageCount: BLIND_REVEAL_STAGE_COUNT,
+      revealDirection: room.blindRevealDirection,
       revealImageUrl: this.blindRevealImageUrl(room, revealStage),
       revealAssetBaseUrl: this.blindRevealAssetBaseUrl(room),
       serverNow,
@@ -940,6 +948,7 @@ export class RoomManager {
       blindTimers: [],
       blindAssetToken: null,
       blindRevealStage: 0,
+      blindRevealDirection: "top-down",
       blindStatus: null,
       blindStartedAt: null,
       blindClues: [],
@@ -1425,6 +1434,7 @@ export class RoomManager {
     room.lastBlindGuessAt.clear();
     room.blindAssetToken = crypto.randomBytes(24).toString("base64url");
     room.blindRevealStage = 0;
+    room.blindRevealDirection = this.randomBlindRevealDirection();
     room.blindStatus = "guessing";
     room.blindStartedAt = startedAt;
     room.blindClues = this.blindCluesFor(room, footballer, 0);

@@ -1006,7 +1006,9 @@ describe("v2.3 Blind Auction", () => {
   };
 
   function startTwoHumanBlind(manager: RoomManager, suffix: string, extra: Record<string, unknown> = {}) {
-    const host = manager.create(`BlindHost${suffix}`, `session-blind-host-${suffix}`, `socket-blind-host-${suffix}`, false);
+    const hostName = `BH-${suffix}`.slice(0, 18);
+    const guestName = `BG-${suffix}`.slice(0, 18);
+    const host = manager.create(hostName, `session-blind-host-${suffix}`, `socket-blind-host-${suffix}`, false);
     manager.updateSettings(host.code, host.managerId, {
       managerLimit: 2,
       squadSize: 6,
@@ -1018,7 +1020,7 @@ describe("v2.3 Blind Auction", () => {
       blindNoGuess: "quick_auction",
       ...extra
     });
-    const guest = manager.join(host.code, `BlindGuest${suffix}`, `session-blind-guest-${suffix}`, `socket-blind-guest-${suffix}`);
+    const guest = manager.join(host.code, guestName, `session-blind-guest-${suffix}`, `socket-blind-guest-${suffix}`);
     manager.setReady(host.code, host.managerId, true);
     manager.setReady(host.code, guest.managerId, true);
     manager.start(host.code, host.managerId);
@@ -1052,7 +1054,7 @@ describe("v2.3 Blind Auction", () => {
     const result = manager.getState(host.code, host.managerId);
     expect(result.phase).toBe("round_result");
     expect(result.lastWinner?.blind).toBe(true);
-    expect(result.lastWinner?.managerName).toBe(`BlindHostWinner`);
+    expect(result.lastWinner?.managerName).toBe(`BH-Winner`);
     expect(result.managers.find(item => item.id === host.managerId)?.squad.some(entry => entry.footballer.id === hidden.id)).toBe(true);
     expect(result.managers.find(item => item.id === guest.managerId)?.squad.some(entry => entry.footballer.id === hidden.id)).toBe(false);
   });
@@ -1092,6 +1094,35 @@ describe("v2.3 Blind Auction", () => {
       expect(state.currentFootballer).not.toBeNull();
       expect(state.endsAt).not.toBeNull();
     } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("assigns one of the four valid reveal directions and keeps it stable for the whole round", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+      const { host } = startTwoHumanBlind(manager, "Direction");
+      const validDirections = ["top-down", "bottom-up", "left-right", "right-left"];
+      const first = manager.getState(host.code, host.managerId).blindRound;
+      expect(first?.revealDirection).toBeDefined();
+      expect(validDirections).toContain(first?.revealDirection);
+      vi.advanceTimersByTime(3000);
+      const later = manager.getState(host.code, host.managerId).blindRound;
+      expect(later?.revealDirection).toBe(first?.revealDirection);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("picks different reveal directions across many rounds (not hard-coded to one value)", () => {
+    const seen = new Set<string>();
+    for (let attempt = 0; attempt < 40 && seen.size < 2; attempt++) {
+      vi.useFakeTimers();
+      try {
+        const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+        const { host } = startTwoHumanBlind(manager, `Dir${attempt}`);
+        const direction = manager.getState(host.code, host.managerId).blindRound?.revealDirection;
+        if (direction) seen.add(direction);
+      } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+    }
+    expect(seen.size).toBeGreaterThan(1);
   });
 
   it("reveals and skips cleanly when no-guess mode is SKIP", () => {

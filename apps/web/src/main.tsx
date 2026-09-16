@@ -8,6 +8,7 @@ import {
   FORMATION_BY_ID,
   BLIND_REVEAL_STAGE_COUNT,
   getBlindRevealStage,
+  getBlindWipeProgress,
   getOpeningBid,
   getMinimumNextBid,
   isValidBidIncrement,
@@ -871,7 +872,7 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
   const changeIconFrequency = (iconFrequency: IconFrequency) => updateSettings({ iconFrequency });
   const changeIconSurprise = (iconSurprise: boolean) => updateSettings({ iconSurprise });
   const changeGameMode = (gameMode: GameMode) => updateSettings({ gameMode });
-  const changeBlindTimer = (blindRevealSeconds: 10 | 15 | 20 | 30) => updateSettings({ blindRevealSeconds });
+  const changeBlindTimer = (blindRevealSeconds: 10 | 15 | 20 | 30 | 45) => updateSettings({ blindRevealSeconds });
   const changeBlindDifficulty = (blindDifficulty: BlindDifficulty) => updateSettings({ blindDifficulty });
   const changeBlindClues = (blindClues: BlindClueLevel) => updateSettings({ blindClues });
   const changeBlindNoGuess = (blindNoGuess: BlindNoGuessMode) => updateSettings({ blindNoGuess });
@@ -901,7 +902,7 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
         <Setting label="Auction timer" value={`${state.settings.auctionSeconds}s`}><input disabled={!isHost} type="range" min="10" max="30" step="1" value={state.settings.auctionSeconds} onChange={event => changeNumber("auctionSeconds", +event.target.value)} /></Setting>
         <Setting label="Formation time limit" value={`${Math.round(state.settings.formationSeconds / 60)} min`}><input disabled={!isHost} type="range" min="120" max="600" step="60" value={state.settings.formationSeconds} onChange={event => changeNumber("formationSeconds", +event.target.value)} /></Setting>
         {!state.isSolo && <div className="manager-limit-setting room-access-setting"><div><span>ROOM ACCESS</span><b>{state.access === "password" ? "PASSWORD" : "OPEN"}</b></div><div className="preset-buttons pricing-mode-buttons"><button disabled={!isHost} className={state.access === "public" ? "active" : ""} onClick={() => changeRoomAccess("public")}><strong>Open room</strong><small>Visible in Find Room and joins instantly.</small></button><button disabled={!isHost} className={state.access === "password" ? "active" : ""} onClick={() => changeRoomAccess("password")}><strong>Password room</strong><small>Visible in Find Room but locked.</small></button></div>{isHost && <div className="lobby-password-row"><input type="password" maxLength={32} value={roomPassword} onChange={event => setRoomPassword(event.target.value)} placeholder={state.hasPassword ? "Enter a new password to replace it" : "Set password (4–32 characters)"} /><button disabled={roomPassword.trim().length < 4} onClick={() => changeRoomAccess("password")}>{state.hasPassword ? "UPDATE PASSWORD" : "SET PASSWORD"}</button></div>}<small>{state.hasPassword ? "A password is active. It is never sent to other players or shown in the room directory." : "Open rooms can be joined without a password."}</small></div>}
-        <div className="manager-limit-setting game-mode-setting"><div><span>GAME MODE</span><b>{state.settings.gameMode === "blind" ? "BLIND AUCTION" : "NORMAL AUCTION"}</b></div><div className="preset-buttons game-mode-buttons"><button disabled={!isHost} className={state.settings.gameMode === "normal" ? "active" : ""} onClick={() => changeGameMode("normal")}><strong>Normal Auction</strong><small>Classic budget bidding.</small></button><button className={state.settings.gameMode === "blind" ? "active blind" : "blind"} onClick={() => setError("Blind Auction is under development. Coming soon!")}><span className="locked-badge">SOON</span><strong>Blind Auction</strong><small>Under development — coming soon.</small></button></div>{state.settings.gameMode === "blind" && <div className="blind-room-options"><div><span>REVEAL TIMER</span><div className="inline-choice">{([10,15,20,30] as const).map(value => <button disabled={!isHost} className={state.settings.blindRevealSeconds === value ? "active" : ""} onClick={() => changeBlindTimer(value)} key={value}>{value}s</button>)}</div></div><div><span>DIFFICULTY</span><div className="inline-choice">{(["easy","normal","hard"] as BlindDifficulty[]).map(value => <button disabled={!isHost} className={state.settings.blindDifficulty === value ? "active" : ""} onClick={() => changeBlindDifficulty(value)} key={value}>{value.toUpperCase()}</button>)}</div></div><div><span>CLUES</span><div className="inline-choice">{(["off","light","normal","more"] as BlindClueLevel[]).map(value => <button disabled={!isHost} className={state.settings.blindClues === value ? "active" : ""} onClick={() => changeBlindClues(value)} key={value}>{value.toUpperCase()}</button>)}</div></div><div><span>IF NOBODY GUESSES</span><div className="inline-choice"><button disabled={!isHost} className={state.settings.blindNoGuess === "quick_auction" ? "active" : ""} onClick={() => changeBlindNoGuess("quick_auction")}>QUICK AUCTION</button><button disabled={!isHost} className={state.settings.blindNoGuess === "skip" ? "active" : ""} onClick={() => changeBlindNoGuess("skip")}>SKIP</button></div></div><small>Answers are checked by the server. Hidden names and clear image URLs are not sent before reveal.</small></div>}</div>
+        <div className="manager-limit-setting game-mode-setting"><div><span>GAME MODE</span><b>{state.settings.gameMode === "blind" ? "BLIND AUCTION" : "NORMAL AUCTION"}</b></div><div className="preset-buttons game-mode-buttons"><button disabled={!isHost} className={state.settings.gameMode === "normal" ? "active" : ""} onClick={() => changeGameMode("normal")}><strong>Normal Auction</strong><small>Classic budget bidding.</small></button><button disabled={!isHost} className={state.settings.gameMode === "blind" ? "active blind" : "blind"} onClick={() => changeGameMode("blind")}><strong>Blind Auction</strong><small>First correct player guess wins.</small></button></div>{state.settings.gameMode === "blind" && <div className="blind-room-options"><div><span>REVEAL TIMER</span><div className="inline-choice">{([10,15,20,30,45] as const).map(value => <button disabled={!isHost} className={state.settings.blindRevealSeconds === value ? "active" : ""} onClick={() => changeBlindTimer(value)} key={value}>{value}s</button>)}</div></div><div><span>DIFFICULTY</span><div className="inline-choice">{(["easy","normal","hard"] as BlindDifficulty[]).map(value => <button disabled={!isHost} className={state.settings.blindDifficulty === value ? "active" : ""} onClick={() => changeBlindDifficulty(value)} key={value}>{value.toUpperCase()}</button>)}</div></div><div><span>CLUES</span><div className="inline-choice">{(["off","light","normal","more"] as BlindClueLevel[]).map(value => <button disabled={!isHost} className={state.settings.blindClues === value ? "active" : ""} onClick={() => changeBlindClues(value)} key={value}>{value.toUpperCase()}</button>)}</div></div><div><span>IF NOBODY GUESSES</span><div className="inline-choice"><button disabled={!isHost} className={state.settings.blindNoGuess === "quick_auction" ? "active" : ""} onClick={() => changeBlindNoGuess("quick_auction")}>QUICK AUCTION</button><button disabled={!isHost} className={state.settings.blindNoGuess === "skip" ? "active" : ""} onClick={() => changeBlindNoGuess("skip")}>SKIP</button></div></div><small>Answers are checked by the server. Hidden names and clear image URLs are not sent before reveal.</small></div>}</div>
 
         <div className="manager-limit-setting pricing-mode-setting"><div><span>PLAYER STARTING PRICES</span><b>{state.settings.pricingMode === "ovr_scaled" ? "OVR PRICING" : "NORMAL"}</b></div><div className="preset-buttons pricing-mode-buttons">{PRICING_MODES.map(mode => <button disabled={!isHost} className={state.settings.pricingMode === mode.id ? "active" : ""} onClick={() => changePricingMode(mode.id)} key={mode.id}><strong>{mode.title}</strong><small>{mode.description}</small></button>)}</div><small>{state.settings.pricingMode === "ovr_scaled" ? "The opening bid uses each player's OVR and market value, scaled to the room budget." : "Classic mode keeps the same opening bid for every footballer."}</small></div>
 
@@ -1165,6 +1166,21 @@ function BlindRevealImage({ blind, difficulty }: { blind: BlindPublicState; diff
   const revealStage = blind.status === "guessing"
     ? Math.max(blind.revealStage, localStage) as 0 | 1 | 2 | 3 | 4 | 5
     : 5;
+  // Continuous 0-1 wipe progress from the same authoritative timestamps, so
+  // the directional reveal and the underlying staged image always agree and
+  // both recover cleanly after a reconnect or a missed broadcast. A small
+  // floor keeps a sliver visible immediately instead of a blank frame.
+  const wipeProgress = blind.status === "guessing" && blind.endsAt !== null
+    ? Math.max(0.07, getBlindWipeProgress({ now: estimatedServerNow, startedAt: blind.startedAt, endsAt: blind.endsAt }))
+    : 1;
+  const direction = blind.revealDirection ?? "top-down";
+  const hiddenPercent = `${((1 - wipeProgress) * 100).toFixed(2)}%`;
+  const wipeClipPath = wipeProgress >= 1
+    ? "inset(0 0 0 0)"
+    : direction === "top-down" ? `inset(0 0 ${hiddenPercent} 0)`
+    : direction === "bottom-up" ? `inset(${hiddenPercent} 0 0 0)`
+    : direction === "left-right" ? `inset(0 ${hiddenPercent} 0 0)`
+    : `inset(0 0 0 ${hiddenPercent})`;
   const baseUrl = blind.revealAssetBaseUrl || blind.revealImageUrl.replace(/\/\d+\.webp(?:\?.*)?$/, "");
   const targetPath = `${baseUrl}/${revealStage}.webp`;
   const imageUrl = `${apiUrl(targetPath)}${retry ? `?retry=${retry}` : ""}`;
@@ -1180,10 +1196,10 @@ function BlindRevealImage({ blind, difficulty }: { blind: BlindPublicState; diff
   };
 
   return <>
-    <div className={`blind-reveal-frame stage-${revealStage}`} data-blind-round={blind.blindRoundId} data-reveal-stage={revealStage}>
+    <div className={`blind-reveal-frame stage-${revealStage} wipe-${direction}`} data-blind-round={blind.blindRoundId} data-reveal-stage={revealStage}>
       {failed
         ? <div className="blind-image-fallback" role="img" aria-label="Mystery footballer image unavailable"><span>?</span><b>MYSTERY PLAYER</b><small>Image unavailable · guessing still works</small></div>
-        : <img key={`${blind.blindRoundId}:${revealStage}:${retry}`} src={imageUrl} alt={blind.status === "guessing" ? "Obscured mystery footballer" : blind.revealedFootballer?.name ?? "Revealed footballer"} draggable={false} onError={handleImageError} />}
+        : <img key={`${blind.blindRoundId}:${revealStage}:${retry}`} src={imageUrl} alt={blind.status === "guessing" ? "Obscured mystery footballer" : blind.revealedFootballer?.name ?? "Revealed footballer"} draggable={false} onError={handleImageError} style={{ clipPath: wipeClipPath, WebkitClipPath: wipeClipPath }} />}
     </div>
     <div className="blind-stage-meta"><span>REVEAL STAGE</span><b>{revealStage + 1}/{stageCount}</b></div>
   </>;

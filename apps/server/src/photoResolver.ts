@@ -25,7 +25,7 @@ function normalized(value: string): string {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-async function resolve(player: Footballer): Promise<FootballerPhoto> {
+async function resolveViaWikidata(player: Footballer): Promise<FootballerPhoto> {
   const searchUrl = new URL("https://www.wikidata.org/w/api.php");
   searchUrl.search = new URLSearchParams({
     action: "wbsearchentities",
@@ -86,6 +86,59 @@ async function resolve(player: Footballer): Promise<FootballerPhoto> {
     licenseUrl,
     source: "Wikimedia Commons"
   };
+}
+
+/**
+ * Fallback for players whose Wikidata item has no formal P18 (image)
+ * statement attached, even though a perfectly good lead photo exists on
+ * their Wikipedia article — very common, since P18 has to be manually
+ * added by a Wikidata editor while an infobox image just needs someone to
+ * upload one on Wikipedia. This uses Wikipedia's public REST summary API,
+ * which resolves the same underlying Wikimedia-hosted image without
+ * requiring the stricter Wikidata claim.
+ */
+async function resolveViaWikipediaSummary(player: Footballer): Promise<FootballerPhoto> {
+  const title = (player.photoSearchName ?? player.name).trim().replace(/\s+/g, "_");
+  const summaryUrl = new URL(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`);
+  type SummaryResponse = {
+    title?: string;
+    description?: string;
+    extract?: string;
+    thumbnail?: { source: string };
+    originalimage?: { source: string };
+    content_urls?: { desktop?: { page?: string } };
+  };
+  const summary = await getJson<SummaryResponse>(summaryUrl);
+  const isFootballRelated = /football|soccer|footballer|midfielder|defender|forward|goalkeeper|winger|striker/i
+    .test(`${summary.description ?? ""} ${summary.extract ?? ""}`);
+  if (!isFootballRelated) throw new Error(`Wikipedia summary for ${player.name} does not look like a footballer.`);
+  const original = summary.originalimage?.source ?? summary.thumbnail?.source;
+  if (!original) throw new Error(`Wikipedia summary for ${player.name} has no lead image.`);
+  const descriptionUrl = summary.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(title)}`;
+
+  return {
+    url: summary.thumbnail?.source ?? original,
+    originalUrl: original,
+    descriptionUrl,
+    credit: "Wikipedia contributor",
+    license: "See file page",
+    licenseUrl: descriptionUrl,
+    source: "Wikimedia Commons"
+  };
+}
+
+async function resolve(player: Footballer): Promise<FootballerPhoto> {
+  try {
+    return await resolveViaWikidata(player);
+  } catch (wikidataError) {
+    try {
+      return await resolveViaWikipediaSummary(player);
+    } catch {
+      // Surface the original, more specific Wikidata error rather than the
+      // generic fallback failure — it's the more useful one to log/debug.
+      throw wikidataError;
+    }
+  }
 }
 
 export function getFootballerPhoto(player: Footballer): Promise<FootballerPhoto> {

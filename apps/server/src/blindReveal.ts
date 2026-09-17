@@ -105,15 +105,13 @@ export async function renderBlindRevealStage(player: Footballer, stageInput: num
       };
     } catch (error) {
       transientFailure = true;
-      if (process.env.NODE_ENV !== "production") {
-        console.warn(JSON.stringify({
-          level: "warn",
-          event: "blind_reveal_asset_fallback",
-          playerId: identity(player),
-          stage,
-          message: error instanceof Error ? error.message : "Unknown image error"
-        }));
-      }
+      console.warn(JSON.stringify({
+        level: "warn",
+        event: "blind_reveal_asset_fallback",
+        playerId: identity(player),
+        stage,
+        message: error instanceof Error ? error.message : "Unknown image error"
+      }));
       return fallbackSvg(stage);
     } finally {
       if (transientFailure) assetCache.delete(key);

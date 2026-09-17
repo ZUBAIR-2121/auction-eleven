@@ -1,68 +1,83 @@
-AUCTION ELEVEN — FIX: GENUINELY FLAKY "MOVES TO FORMATION..." TEST
-========================================================================
+AUCTION ELEVEN — FIX: PLAYER IMAGE STILL NOT APPEARING (photo coverage gap)
+================================================================================
 
-ROOT CAUSE (this time actually proven with debug output, not guessed)
---------------------------------------------------------------------------
-This was a real, reproducible bug in the TEST, not your product code.
+WHY THE LAST FIX WASN'T ENOUGH
+----------------------------------
+The previous fix stopped a TRANSIENT hiccup from being cached forever.
+But your new screenshots showed the fallback silhouette consistently
+across multiple stages (2/6, 4/6, 5/6) of the SAME round for the SAME
+player — that's not a transient hiccup, that's a real, permanent "no
+photo found" case for that specific player, which no amount of retrying
+would ever fix.
 
-The test builds a synthetic "already complete" squad for both the host
-and the guest using the same helper, which always picks the SAME first
-few players from the database for both managers. That's fine on its
-own — but the room's first auction round independently and randomly
-picks a live player to auction.
-
-When that random pick happened to be one of the same players baked
-into both synthetic squads, your (correct) "you already own this
-player" rule removed the guest as an eligible bidder. With the guest
-excluded and the host already marked done, ZERO eligible bidders
-remained, so the round legitimately auto-resolved into round_result
-immediately — before the guest ever got a chance to call DONE. The
-test then asserted "auction" and got "round_result", intermittently,
-purely depending on which player happened to be drawn.
-
-I proved this by temporarily instrumenting the test to log the live
-player and outcome across many runs — the two real failures were both
-cases where the synthetic squad happened to include the live player
-(def-01, def-02).
+THE REAL GAP
+------------
+Your photo resolver only trusts a Wikidata "P18" (image) claim. Plenty
+of real, well-known footballers have a perfectly good photo on their
+Wikipedia article's infobox but no formal P18 statement attached in
+Wikidata — P18 has to be manually added by a Wikidata editor, while an
+infobox photo just needs someone to upload one on Wikipedia itself.
+These are common, and every one of them was permanently falling back
+to the silhouette with no way to ever recover.
 
 THE FIX
 -------
-apps/server/test/roomFlow.test.ts:
-  - squadWithValidStarters() now accepts an optional exclude list.
-  - The flaky test now excludes the room's actual live footballer
-    when building both synthetic squads, so this coincidence can
-    never happen again, regardless of which player gets drawn.
+apps/server/src/photoResolver.ts now tries a second, independent data
+source when Wikidata has no P18 image: Wikipedia's own public REST
+summary API (a stable, well-documented, unauthenticated endpoint),
+which resolves the same underlying Wikimedia-hosted lead image without
+needing the stricter Wikidata claim. It also sanity-checks the summary's
+description/extract actually looks like a footballer before accepting
+it, so it won't accidentally pick up an unrelated person who happens to
+share a name.
 
-VERIFIED
---------
-Ran the full suite 8 times back to back: 146/146 passing every time
-(previously it failed roughly 1 in 3-5 runs). Also verified:
-  npm run typecheck  -> pass
-  npm run build      -> pass
+apps/server/src/blindReveal.ts: the fallback-fetch failure is now
+always logged (previously only outside production) so you can check
+your Render logs for the exact reason (which data source failed and
+why) if a specific player is still showing the silhouette.
 
 WHAT'S IN THIS FOLDER
 ------------------------
-  apps/server/test/roomFlow.test.ts  (only file changed)
+  apps/server/src/photoResolver.ts        — the real fix
+  apps/server/src/blindReveal.ts          — always-on failure logging
+  apps/server/test/photoResolver.test.ts  — new test file (didn't
+    exist before), 4 tests covering: normal Wikidata success, the new
+    Wikipedia-summary fallback succeeding, a summary that's clearly
+    not a footballer being rejected, and the original Wikidata error
+    surfacing correctly when both sources fail.
+
+VERIFIED
+--------
+  npm run typecheck  -> pass
+  npm test           -> 150/150 pass (146 previous + 4 new)
+  npm run build      -> pass
 
 HOW TO APPLY (PowerShell)
 ---------------------------
-1. Unzip this folder, then copy the file into your project,
-   overwriting the original at the same path:
-     apps/server/test/roomFlow.test.ts
+1. Unzip this folder, then copy the 3 files into your project,
+   overwriting the originals at the same paths:
+     apps/server/src/photoResolver.ts
+     apps/server/src/blindReveal.ts
+     apps/server/test/photoResolver.test.ts
 
-2. Verify locally (run it several times, since the whole point was
-   that a single green run doesn't prove anything for this one):
+2. Verify locally:
      cd apps\server
      npm run typecheck
-     for ($i=1; $i -le 6; $i++) { npm test }
+     npm test
      npm run build
 
 3. Commit and push:
      git add -A
-     git commit -m "Fix flaky DONE-completion test: exclude live round player from synthetic test squads"
+     git commit -m "Add Wikipedia-summary photo fallback for players with no Wikidata P18 image"
      git push
 
-NOTE
-----
-Test-only change. No production code touched, so no behavior change
-for players — just a more reliable test suite.
+WHAT TO EXPECT AFTER DEPLOYING
+---------------------------------
+Real photos should now appear for meaningfully more players, including
+ones that were permanently stuck on the silhouette before. It's still
+possible for a genuinely obscure player to have no usable photo on
+EITHER Wikidata or Wikipedia — that's a real data-coverage limit, not
+a bug, and the game correctly falls back to the silhouette rather than
+breaking. If you spot a SPECIFIC player still always failing after
+this, check your Render logs for the "blind_reveal_asset_fallback"
+warning — it now always logs the exact reason.

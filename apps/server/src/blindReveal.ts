@@ -73,6 +73,15 @@ export async function renderBlindRevealStage(player: Footballer, stageInput: num
   if (cached) return cached;
 
   const pending = (async () => {
+    // Only a genuinely deterministic outcome (no recognizable source URL for
+    // this photo at all) is safe to cache long-term. A timeout, a slow
+    // on-demand Wikimedia thumbnail render, a bad HTTP status, or an
+    // oversized response are transient — caching those forever would mean a
+    // single hiccup permanently shows the silhouette for that player/stage,
+    // with no way to recover until the server restarts. transientFailure
+    // tracks that distinction so the finally-block below can evict the
+    // cache entry for anything that should be retried on the next request.
+    let transientFailure = false;
     try {
       const photo = await getFootballerPhoto(player);
       // Meaningfully different source resolutions. The browser receives only
@@ -85,16 +94,17 @@ export async function renderBlindRevealStage(player: Footballer, stageInput: num
         headers: { Accept: "image/avif,image/webp,image/*,*/*;q=0.8" },
         signal: AbortSignal.timeout(12_000)
       });
-      if (!response.ok) return fallbackSvg(stage);
+      if (!response.ok) { transientFailure = true; return fallbackSvg(stage); }
       const contentLength = Number(response.headers.get("content-length") ?? 0);
-      if (contentLength > 8_000_000) return fallbackSvg(stage);
+      if (contentLength > 8_000_000) { transientFailure = true; return fallbackSvg(stage); }
       const buffer = Buffer.from(await response.arrayBuffer());
-      if (!buffer.length || buffer.length > 8_000_000) return fallbackSvg(stage);
+      if (!buffer.length || buffer.length > 8_000_000) { transientFailure = true; return fallbackSvg(stage); }
       return {
         buffer,
         contentType: response.headers.get("content-type") || "image/jpeg"
       };
     } catch (error) {
+      transientFailure = true;
       if (process.env.NODE_ENV !== "production") {
         console.warn(JSON.stringify({
           level: "warn",
@@ -105,6 +115,8 @@ export async function renderBlindRevealStage(player: Footballer, stageInput: num
         }));
       }
       return fallbackSvg(stage);
+    } finally {
+      if (transientFailure) assetCache.delete(key);
     }
   })().catch(error => {
     assetCache.delete(key);

@@ -690,9 +690,10 @@ describe("v1.9 starter-based I'M DONE completion", () => {
   type MutableRoom = { managers: MutableManager[] };
   type MutableRoomManager = { rooms: Map<string, MutableRoom> };
 
-  const squadWithValidStarters = (starterCount: number, extraSubs = 0) => {
-    const goalkeeper = FOOTBALLERS.find(player => player.position === "GK")!;
-    const outfield = FOOTBALLERS.filter(player => player.position !== "GK").slice(0, starterCount - 1 + extraSubs);
+  const squadWithValidStarters = (starterCount: number, extraSubs = 0, excludeIds: string[] = []) => {
+    const excluded = new Set(excludeIds);
+    const goalkeeper = FOOTBALLERS.find(player => player.position === "GK" && !excluded.has(player.id))!;
+    const outfield = FOOTBALLERS.filter(player => player.position !== "GK" && !excluded.has(player.id)).slice(0, starterCount - 1 + extraSubs);
     return [goalkeeper, ...outfield].map((footballer, index) => ({ footballer, price: footballer.basePrice, round: index + 1 }));
   };
 
@@ -818,8 +819,16 @@ describe("v1.9 starter-based I'M DONE completion", () => {
     vi.useFakeTimers();
     try {
       const { manager, host, guest, room } = startTwoManagerRoom(6, 3);
-      room.managers.find(item => item.id === host.managerId)!.squad = squadWithValidStarters(6, 0);
-      room.managers.find(item => item.id === guest.managerId)!.squad = squadWithValidStarters(6, 0);
+      // Exclude whichever footballer the room's first round happened to draw:
+      // both managers' synthetic squads below stand in for a full starting
+      // lineup, but they must never accidentally include the LIVE round's
+      // player, or the "guest already owns this footballer" rule (correctly)
+      // removes guest as an eligible challenger, making the round resolve on
+      // its own regardless of DONE status and turning this into a test of
+      // something else entirely.
+      const excludeIds = room.currentFootballer ? [room.currentFootballer.id] : [];
+      room.managers.find(item => item.id === host.managerId)!.squad = squadWithValidStarters(6, 0, excludeIds);
+      room.managers.find(item => item.id === guest.managerId)!.squad = squadWithValidStarters(6, 0, excludeIds);
       const formationSpy = vi.spyOn(manager as unknown as { beginFormation: (room: unknown) => void }, "beginFormation");
       manager.completeAuction(host.code, host.managerId);
       expect(manager.getState(host.code, host.managerId).phase).toBe("auction");

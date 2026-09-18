@@ -1,22 +1,19 @@
 import type { Footballer, FootballerPhoto } from "@auction-eleven/shared";
-import { getFootballerPhoto } from "./photoResolver.js";
+import { getLocalFootballerImage } from "./localPlayerImages.js";
 
 export interface BlindRevealAsset {
   buffer: Buffer;
   contentType: string;
 }
 
-const assetCache = new Map<string, Promise<BlindRevealAsset>>();
-
 function identity(player: Footballer): string {
   return player.canonicalId ?? player.catalogId ?? player.id;
 }
 
 /**
- * Builds a Wikimedia thumbnail URL without relying on the exact thumb URL
- * shape returned by the API. This fixes early stages falling back to the same
- * generic silhouette when a photo URL was an original file URL or had a
- * slightly different thumbnail path.
+ * Kept for backwards compatibility with the existing test suite and any
+ * integrations that used this helper. Blind Auction itself no longer depends
+ * on Wikimedia at runtime; it uses the bundled real-player image pack.
  */
 export function buildWikimediaThumbnailUrl(photo: Pick<FootballerPhoto, "url" | "originalUrl">, width: number): string | null {
   const safeWidth = Math.max(8, Math.min(720, Math.round(width)));
@@ -62,65 +59,28 @@ function fallbackSvg(stage: number): BlindRevealAsset {
 }
 
 /**
- * Returns only the raster resolution legally available for the requested
- * reveal stage. The clear source URL is never sent to the browser before the
- * server authorizes stage 5.
+ * Blind Auction now reads the exact selected footballer's real photo from the
+ * bundled local player-image pack. The browser receives this same photograph
+ * for the round and the UI progressively removes its blur as clarity rises.
+ *
+ * This deliberately avoids Wikimedia/Wikipedia network calls during a match,
+ * so HTTP 429/rate-limit failures can no longer replace the player with the
+ * generic green mystery image.
  */
 export async function renderBlindRevealStage(player: Footballer, stageInput: number): Promise<BlindRevealAsset> {
   const stage = Math.max(0, Math.min(5, Math.round(stageInput)));
-  const key = `${identity(player)}:${stage}`;
-  const cached = assetCache.get(key);
-  if (cached) return cached;
-
-  const pending = (async () => {
-    // Only a genuinely deterministic outcome (no recognizable source URL for
-    // this photo at all) is safe to cache long-term. A timeout, a slow
-    // on-demand Wikimedia thumbnail render, a bad HTTP status, or an
-    // oversized response are transient — caching those forever would mean a
-    // single hiccup permanently shows the silhouette for that player/stage,
-    // with no way to recover until the server restarts. transientFailure
-    // tracks that distinction so the finally-block below can evict the
-    // cache entry for anything that should be retried on the next request.
-    let transientFailure = false;
-    try {
-      const photo = await getFootballerPhoto(player);
-      // Meaningfully different source resolutions. The browser receives only
-      // these reduced pixels, rather than a clear image hidden with CSS.
-      const widths = [14, 24, 42, 76, 150, 720] as const;
-      const sourceUrl = stage === 5 ? photo.url : buildWikimediaThumbnailUrl(photo, widths[stage]!);
-      if (!sourceUrl) return fallbackSvg(stage);
-
-      const response = await fetch(sourceUrl, {
-        headers: { Accept: "image/avif,image/webp,image/*,*/*;q=0.8" },
-        signal: AbortSignal.timeout(12_000)
-      });
-      if (!response.ok) { transientFailure = true; return fallbackSvg(stage); }
-      const contentLength = Number(response.headers.get("content-length") ?? 0);
-      if (contentLength > 8_000_000) { transientFailure = true; return fallbackSvg(stage); }
-      const buffer = Buffer.from(await response.arrayBuffer());
-      if (!buffer.length || buffer.length > 8_000_000) { transientFailure = true; return fallbackSvg(stage); }
-      return {
-        buffer,
-        contentType: response.headers.get("content-type") || "image/jpeg"
-      };
-    } catch (error) {
-      transientFailure = true;
-      console.warn(JSON.stringify({
-        level: "warn",
-        event: "blind_reveal_asset_fallback",
-        playerId: identity(player),
-        stage,
-        message: error instanceof Error ? error.message : "Unknown image error"
-      }));
-      return fallbackSvg(stage);
-    } finally {
-      if (transientFailure) assetCache.delete(key);
-    }
-  })().catch(error => {
-    assetCache.delete(key);
-    throw error;
-  });
-
-  assetCache.set(key, pending);
-  return pending;
+  try {
+    const image = await getLocalFootballerImage(player);
+    return { buffer: image.buffer, contentType: image.contentType };
+  } catch (error) {
+    console.error(JSON.stringify({
+      level: "error",
+      event: "blind_local_player_image_missing",
+      playerId: identity(player),
+      playerName: player.name,
+      stage,
+      message: error instanceof Error ? error.message : "Unknown local image error"
+    }));
+    return fallbackSvg(stage);
+  }
 }

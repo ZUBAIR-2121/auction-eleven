@@ -1,6 +1,8 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BLIND_REVEAL_STAGE_COUNT, getBlindRevealStage } from "@auction-eleven/shared";
-import { buildWikimediaThumbnailUrl } from "../src/blindReveal.js";
+import { buildWikimediaThumbnailUrl, renderBlindRevealStage } from "../src/blindReveal.js";
+import { FOOTBALLERS } from "../src/footballers.js";
+import { getLocalFootballerImageCoverage } from "../src/localPlayerImages.js";
 
 describe("Blind reveal timing and stage assets", () => {
   it("derives deterministic stages from authoritative timestamps", () => {
@@ -22,7 +24,7 @@ describe("Blind reveal timing and stage assets", () => {
     expect(getBlindRevealStage({ now: endsAt, startedAt, endsAt, difficulty: "normal" })).toBe(5);
   });
 
-  it("builds protected lower-resolution Wikimedia thumbnails from both thumb and original URLs", () => {
+  it("builds protected lower-resolution Wikimedia thumbnails for legacy callers", () => {
     const photo = {
       url: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Test_Player.jpg/720px-Test_Player.jpg",
       originalUrl: "https://upload.wikimedia.org/wikipedia/commons/a/ab/Test_Player.jpg"
@@ -45,71 +47,25 @@ describe("Blind reveal timing and stage assets", () => {
   });
 });
 
-describe("Blind reveal asset caching (regression: a transient failure must not be cached forever)", () => {
-  const FAKE_PHOTO = {
-    url: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Test_Player.jpg/720px-Test_Player.jpg",
-    originalUrl: "https://upload.wikimedia.org/wikipedia/commons/a/ab/Test_Player.jpg",
-    descriptionUrl: "https://commons.wikimedia.org/wiki/File:Test_Player.jpg",
-    credit: "Test",
-    license: "CC BY-SA 4.0",
-    licenseUrl: "https://creativecommons.org/licenses/by-sa/4.0/",
-    source: "Wikimedia Commons" as const
-  };
-  const PLAYER = { id: "p1", canonicalId: "p1", catalogId: "p1", name: "Test Player" } as unknown as import("@auction-eleven/shared").Footballer;
-
-  let originalFetch: typeof fetch;
-
-  beforeEach(() => {
-    originalFetch = global.fetch;
-    vi.resetModules();
+describe("Blind reveal local player-image pack", () => {
+  it("contains a local real-player image for every footballer in the game", async () => {
+    const coverage = await getLocalFootballerImageCoverage(FOOTBALLERS);
+    expect(coverage.total).toBe(186);
+    expect(coverage.available).toBe(186);
+    expect(coverage.missing).toEqual([]);
   });
 
-  afterEach(() => {
-    global.fetch = originalFetch;
-    vi.doUnmock("../src/photoResolver.js");
-  });
+  it("returns the selected player's local image without any network fetch", async () => {
+    const player = FOOTBALLERS.find(item => item.canonicalId === "lionel-messi")!;
+    const fetchSpy = vi.spyOn(global, "fetch");
+    const early = await renderBlindRevealStage(player, 0);
+    const clear = await renderBlindRevealStage(player, 5);
 
-  it("retries and recovers after a transient fetch failure instead of caching the fallback forever", async () => {
-    vi.doMock("../src/photoResolver.js", () => ({ getFootballerPhoto: vi.fn().mockResolvedValue(FAKE_PHOTO) }));
-    let attempt = 0;
-    global.fetch = vi.fn().mockImplementation(async () => {
-      attempt += 1;
-      if (attempt === 1) return { ok: false, status: 503, headers: new Headers() } as Response;
-      return {
-        ok: true,
-        status: 200,
-        headers: new Headers({ "content-type": "image/jpeg", "content-length": "9" }),
-        arrayBuffer: async () => new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9]).buffer
-      } as unknown as Response;
-    }) as unknown as typeof fetch;
-
-    const { renderBlindRevealStage } = await import("../src/blindReveal.js");
-
-    const first = await renderBlindRevealStage(PLAYER, 0);
-    expect(first.contentType).toBe("image/svg+xml");
-
-    const second = await renderBlindRevealStage(PLAYER, 0);
-    expect(second.contentType).toBe("image/jpeg");
-    expect(second.buffer.length).toBe(9);
-    expect(attempt).toBe(2);
-  });
-
-  it("does cache a genuinely successful fetch so it isn't re-requested on every stage read", async () => {
-    vi.doMock("../src/photoResolver.js", () => ({ getFootballerPhoto: vi.fn().mockResolvedValue(FAKE_PHOTO) }));
-    let attempt = 0;
-    global.fetch = vi.fn().mockImplementation(async () => {
-      attempt += 1;
-      return {
-        ok: true,
-        status: 200,
-        headers: new Headers({ "content-type": "image/jpeg", "content-length": "4" }),
-        arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer
-      } as unknown as Response;
-    }) as unknown as typeof fetch;
-
-    const { renderBlindRevealStage } = await import("../src/blindReveal.js");
-    await renderBlindRevealStage(PLAYER, 1);
-    await renderBlindRevealStage(PLAYER, 1);
-    expect(attempt).toBe(1);
+    expect(early.contentType).toMatch(/^image\//);
+    expect(clear.contentType).toBe(early.contentType);
+    expect(clear.buffer.equals(early.buffer)).toBe(true);
+    expect(clear.buffer.length).toBeGreaterThan(10_000);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
   });
 });

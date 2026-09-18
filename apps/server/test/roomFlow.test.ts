@@ -1076,13 +1076,19 @@ describe("v2.3 Blind Auction", () => {
     expect(manager.submitBlindGuess(host.code, host.managerId, "wrong-2", blindRoundId, "Another Wrong Guess").result).toBe("rate_limited");
   });
 
-  it("does not allow a client to request future clear reveal stages", () => {
+  it("serves the fixed full-resolution reveal asset immediately, gated only by a valid round token", () => {
     const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
     const { host } = startTwoHumanBlind(manager, "Asset");
     const unsafe = manager as unknown as BlindUnsafeRoomManager;
     const room = unsafe.rooms.get(host.code)!;
+    // The reveal is a client-side blur-to-clear animation over one fixed
+    // image, not a resolution ladder, so stage 5 (the 720px asset) is
+    // available from the very start of the round rather than only once the
+    // round has fully revealed.
     expect(manager.getBlindRevealFootballer(room.blindAssetToken!, 0).id).toBe(room.currentFootballer!.id);
-    expect(() => manager.getBlindRevealFootballer(room.blindAssetToken!, 5)).toThrow(/not available yet/i);
+    expect(manager.getBlindRevealFootballer(room.blindAssetToken!, 5).id).toBe(room.currentFootballer!.id);
+    // An invalid/expired token must still be rejected regardless of stage.
+    expect(() => manager.getBlindRevealFootballer("not-a-real-token", 5)).toThrow(/expired/i);
   });
 
   it("reveals then enters the configured quick auction when nobody guesses", () => {

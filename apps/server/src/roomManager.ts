@@ -809,8 +809,16 @@ export class RoomManager {
     const stage = Math.max(0, Math.min(5, Math.round(stageInput)));
     for (const room of this.rooms.values()) {
       if (!room.blindAssetToken || room.blindAssetToken !== assetToken || !room.currentFootballer) continue;
-      const maxStage = this.currentBlindRevealStage(room);
-      if (stage > maxStage) throw new Error("That reveal stage is not available yet.");
+      // Stage 5 (the 720px asset) is now available for the whole round: the
+      // reveal is a pure client-side CSS blur-to-clear animation over this
+      // one fixed image rather than a resolution ladder, so there is no
+      // "too early" restriction left to apply to it. Lower stage numbers
+      // stay gated for backwards compatibility with anything still
+      // requesting them.
+      if (stage < 5) {
+        const maxStage = this.currentBlindRevealStage(room);
+        if (stage > maxStage) throw new Error("That reveal stage is not available yet.");
+      }
       return room.currentFootballer;
     }
     throw new Error("Blind reveal asset expired.");

@@ -6,8 +6,6 @@ import { io, type Socket } from "socket.io-client";
 import {
   FORMATIONS,
   FORMATION_BY_ID,
-  BLIND_REVEAL_STAGE_COUNT,
-  getBlindRevealStage,
   getBlindWipeProgress,
   getOpeningBid,
   getMinimumNextBid,
@@ -1125,7 +1123,7 @@ function MiniSquadModal({ state, managerId, canComplete, completion, onDone, onC
 
 type BlindPublicState = NonNullable<RoomState["blindRound"]>;
 
-function BlindRevealImage({ blind, difficulty }: { blind: BlindPublicState; difficulty: BlindDifficulty }) {
+function BlindRevealImage({ blind }: { blind: BlindPublicState }) {
   const [clientNow, setClientNow] = useState(() => Date.now());
   const anchorRef = useRef({ serverNow: blind.serverNow ?? Date.now(), clientNow: Date.now() });
   const [retry, setRetry] = useState(0);
@@ -1150,45 +1148,28 @@ function BlindRevealImage({ blind, difficulty }: { blind: BlindPublicState; diff
   }, []);
 
   const estimatedServerNow = anchorRef.current.serverNow + (clientNow - anchorRef.current.clientNow);
-  const stageCount = blind.revealStageCount || BLIND_REVEAL_STAGE_COUNT;
-  const localStage = blind.status === "guessing" && blind.endsAt !== null
-    ? getBlindRevealStage({
-        now: estimatedServerNow,
-        startedAt: blind.startedAt,
-        endsAt: blind.endsAt,
-        stageCount,
-        difficulty
-      })
-    : 5;
-  // Never move backwards if a newer authoritative snapshot has already crossed
-  // a reveal threshold. Time-based progression lets the image keep advancing
-  // even if one room-state broadcast is delayed or missed.
-  const revealStage = blind.status === "guessing"
-    ? Math.max(blind.revealStage, localStage) as 0 | 1 | 2 | 3 | 4 | 5
-    : 5;
-  // Continuous 0-1 wipe progress from the same authoritative timestamps, so
-  // the directional reveal and the underlying staged image always agree and
-  // both recover cleanly after a reconnect or a missed broadcast. A small
-  // floor keeps a sliver visible immediately instead of a blank frame.
-  const wipeProgress = blind.status === "guessing" && blind.endsAt !== null
-    ? Math.max(0.07, getBlindWipeProgress({ now: estimatedServerNow, startedAt: blind.startedAt, endsAt: blind.endsAt }))
+  // One fixed image for the whole round (the 720px reveal asset). The
+  // reveal itself is a pure CSS blur that continuously eases from heavy to
+  // clear as the timer runs down, instead of swapping between separate
+  // resolution files. Same authoritative timestamps as before, so it stays
+  // in sync across everyone in the room and recovers correctly after a
+  // reconnect or a missed broadcast.
+  const clarity = blind.status === "guessing" && blind.endsAt !== null
+    ? getBlindWipeProgress({ now: estimatedServerNow, startedAt: blind.startedAt, endsAt: blind.endsAt })
     : 1;
-  const direction = blind.revealDirection ?? "top-down";
-  const hiddenPercent = `${((1 - wipeProgress) * 100).toFixed(2)}%`;
-  const wipeClipPath = wipeProgress >= 1
-    ? "inset(0 0 0 0)"
-    : direction === "top-down" ? `inset(0 0 ${hiddenPercent} 0)`
-    : direction === "bottom-up" ? `inset(${hiddenPercent} 0 0 0)`
-    : direction === "left-right" ? `inset(0 ${hiddenPercent} 0 0)`
-    : `inset(0 0 0 ${hiddenPercent})`;
+  const MAX_BLUR_PX = 26;
+  const MIN_BLUR_PX = 0.6; // never perfectly sharp until the round actually ends
+  const blurPx = blind.status === "guessing"
+    ? Math.max(MIN_BLUR_PX, MAX_BLUR_PX * (1 - clarity))
+    : 0;
   const baseUrl = blind.revealAssetBaseUrl || blind.revealImageUrl.replace(/\/\d+\.webp(?:\?.*)?$/, "");
-  const targetPath = `${baseUrl}/${revealStage}.webp`;
+  const targetPath = `${baseUrl}/5.webp`;
   const imageUrl = `${apiUrl(targetPath)}${retry ? `?retry=${retry}` : ""}`;
 
   useEffect(() => {
     setRetry(0);
     setFailed(false);
-  }, [blind.blindRoundId, revealStage, baseUrl]);
+  }, [blind.blindRoundId, baseUrl]);
 
   const handleImageError = () => {
     if (retry === 0) setRetry(1);
@@ -1196,12 +1177,12 @@ function BlindRevealImage({ blind, difficulty }: { blind: BlindPublicState; diff
   };
 
   return <>
-    <div className={`blind-reveal-frame stage-${revealStage} wipe-${direction}`} data-blind-round={blind.blindRoundId} data-reveal-stage={revealStage}>
+    <div className="blind-reveal-frame blur-reveal" data-blind-round={blind.blindRoundId}>
       {failed
         ? <div className="blind-image-fallback" role="img" aria-label="Mystery footballer image unavailable"><span>?</span><b>MYSTERY PLAYER</b><small>Image unavailable · guessing still works</small></div>
-        : <img key={`${blind.blindRoundId}:${revealStage}:${retry}`} src={imageUrl} alt={blind.status === "guessing" ? "Obscured mystery footballer" : blind.revealedFootballer?.name ?? "Revealed footballer"} draggable={false} onError={handleImageError} style={{ clipPath: wipeClipPath, WebkitClipPath: wipeClipPath }} />}
+        : <img key={`${blind.blindRoundId}:${retry}`} src={imageUrl} alt={blind.status === "guessing" ? "Obscured mystery footballer" : blind.revealedFootballer?.name ?? "Revealed footballer"} draggable={false} onError={handleImageError} style={{ filter: `blur(${blurPx}px)`, WebkitFilter: `blur(${blurPx}px)` }} />}
     </div>
-    <div className="blind-stage-meta"><span>REVEAL STAGE</span><b>{revealStage + 1}/{stageCount}</b></div>
+    <div className="blind-stage-meta"><span>CLARITY</span><b>{Math.round(clarity * 100)}%</b></div>
   </>;
 }
 
@@ -1237,7 +1218,7 @@ function BlindArena({ socket, state, managerId, setError, onDone }: { socket: Ga
   return <main className="arena page blind-arena">
     <div className="arena-top blind-top"><div><span>ROOM {state.code}</span><b>BLIND ROUND {state.roundIndex + 1}/{state.totalRounds}</b></div><div className="auction-top-actions"><AuctionTimer endsAt={blind.endsAt} durationSeconds={state.settings.blindRevealSeconds} /><button type="button" className="squad-quick-button" onClick={() => setSquadOpen(true)}>👥 <b>{completion.completedStarters}/{completion.requiredStarters}</b></button></div><div className="live"><i /> {blind.status === "guessing" ? "GUESS THE PLAYER" : "FULL REVEAL"}</div></div>
     <section className="blind-stage-card">
-      <BlindRevealImage blind={blind} difficulty={state.settings.blindDifficulty} />
+      <BlindRevealImage blind={blind} />
       {blind.clues.length > 0 && <div className="blind-clues">{blind.clues.map(clue => <span key={clue.label}><small>{clue.label}</small><b>{clue.value}</b></span>)}</div>}
       {revealed && blind.status !== "guessing" && <div className="blind-revealed-name"><span>IT WAS</span><strong>{revealed.name}</strong><small>{getFootballerPrimaryRoles(revealed).join(" / ")} · {revealed.playerType === "ICON" ? "ICON" : "CURRENT"}</small></div>}
     </section>

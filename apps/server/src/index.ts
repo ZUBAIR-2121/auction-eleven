@@ -74,8 +74,8 @@ io.on("connection",socket=>{
     rooms.assertSocketOwner(code,managerId,socket.id);
     return managerId;
   };
-  socket.on("room:create",(payload,ack)=>safeAck(ack,()=>{const result=rooms.create(payload.name,payload.sessionId,socket.id,!!payload.solo,payload.access,payload.password);managerId=result.managerId;roomCode=result.code;socket.join(result.code);socket.emit("room:state",rooms.getState(result.code,result.managerId));return result;}));
-  socket.on("room:join",(payload,ack)=>safeAck(ack,()=>{const result=rooms.join(payload.code,payload.name,payload.sessionId,socket.id,payload.password);managerId=result.managerId;roomCode=result.code;socket.join(result.code);socket.emit("room:state",rooms.getState(result.code,result.managerId));return result;}));
+  socket.on("room:create",(payload,ack)=>safeAck(ack,()=>{const result=rooms.create(payload.name,payload.sessionId,socket.id,!!payload.solo,payload.access,payload.password,payload.avatar);managerId=result.managerId;roomCode=result.code;socket.join(result.code);socket.emit("room:state",rooms.getState(result.code,result.managerId));return result;}));
+  socket.on("room:join",(payload,ack)=>safeAck(ack,()=>{const result=rooms.join(payload.code,payload.name,payload.sessionId,socket.id,payload.password,payload.avatar);managerId=result.managerId;roomCode=result.code;socket.join(result.code);socket.emit("room:state",rooms.getState(result.code,result.managerId));return result;}));
   socket.on("rooms:list",(payload,ack)=>safeAck(ack,()=>rooms.listRooms(payload.filters)));
   socket.on("room:resume",(payload,ack)=>safeAck(ack,()=>{const result=rooms.resume(payload.code,payload.sessionId,socket.id);managerId=result.managerId;roomCode=payload.code.toUpperCase();socket.join(roomCode);socket.emit("room:state",rooms.getState(roomCode,result.managerId));return result;}));
   socket.on("room:leave",(payload,ack)=>safeAck(ack,()=>{const seat=ensureSeat(payload.code);rooms.leave(payload.code,seat);socket.leave(payload.code.toUpperCase());managerId=null;roomCode=null;return null;}));

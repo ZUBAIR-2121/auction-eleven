@@ -133,7 +133,8 @@ const chatSchema = z.string().trim().min(1, "Write a message first.").max(300, "
 const accessSchema = z.enum(["public", "password"]);
 const passwordSchema = z.string().trim().min(4, "Room passwords need at least four characters.").max(32, "Room passwords can contain up to 32 characters.").regex(/^[^\u0000-\u001f\u007f]+$/, "Room passwords cannot contain control characters.");
 
-const AVATARS = ["🦁", "🐺", "🦅", "🐉", "🦊", "🐯", "🦈", "⚡", "🔥", "👑", "🦂", "🦬", "🦏"];
+const AVATARS = Array.from({ length: 30 }, (_, index) => `crest-${String(index + 1).padStart(2, "0")}`);
+const avatarSchema = z.string().regex(/^crest-(?:0[1-9]|[12]\d|30)$/);
 const BOT_NAMES = ["Bargain Hunter AI", "Aggressive Bidder AI", "Star Collector AI", "Balanced Manager AI", "Tactical Specialist AI", "Last-Second Sniper AI", "Value Scout AI", "Pressure Manager AI", "Elite Collector AI", "Formation Expert AI", "Counter Bidder AI", "Patient Sniper AI"];
 const ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const shuffle = <T>(input: T[]): T[] => {
@@ -899,13 +900,13 @@ export class RoomManager {
     room.managers.forEach(manager => { manager.isHost = manager.id === next.id; });
   }
 
-  create(nameInput: string, sessionId: string, socketId: string, solo = false, accessInput: RoomAccess = "public", passwordInput?: string): { code: string; managerId: string } {
+  create(nameInput: string, sessionId: string, socketId: string, solo = false, accessInput: RoomAccess = "public", passwordInput?: string, avatarInput?: string): { code: string; managerId: string } {
     const name = nameSchema.parse(nameInput);
     const code = this.code();
     const settings = structuredClone(DEFAULT_SETTINGS);
     const access = solo ? "public" : accessSchema.parse(accessInput);
     const password = access === "password" ? this.makePassword(passwordInput ?? "") : null;
-    const host = this.manager(name, sessionId, socketId, true, false, settings.startingBudget, 0);
+    const host = this.manager(name, sessionId, socketId, true, false, settings.startingBudget, 0, avatarInput);
     const managers = [host];
     if (solo) {
       BOT_NAMES.slice(0, settings.managerLimit - 1).forEach((botName, index) => {
@@ -976,11 +977,11 @@ export class RoomManager {
     return { code, managerId: host.id };
   }
 
-  private manager(name: string, sessionId: string, socketId: string | null, isHost: boolean, isBot: boolean, budget: number, joinedAt: number): InternalManager {
+  private manager(name: string, sessionId: string, socketId: string | null, isHost: boolean, isBot: boolean, budget: number, joinedAt: number, avatarInput?: string): InternalManager {
     return {
       id: this.id("manager"),
       name,
-      avatar: AVATARS[joinedAt % AVATARS.length]!,
+      avatar: avatarSchema.safeParse(avatarInput).success ? avatarInput! : AVATARS[joinedAt % AVATARS.length]!,
       budget,
       ready: false,
       connected: true,
@@ -1002,7 +1003,7 @@ export class RoomManager {
     };
   }
 
-  join(codeInput: string, nameInput: string, sessionId: string, socketId: string, passwordInput?: string): { code: string; managerId: string } {
+  join(codeInput: string, nameInput: string, sessionId: string, socketId: string, passwordInput?: string, avatarInput?: string): { code: string; managerId: string } {
     const code = codeInput.trim().toUpperCase();
     const room = this.get(code);
     if (room.isSolo) throw new Error("Solo Practice rooms cannot be joined.");
@@ -1015,6 +1016,7 @@ export class RoomManager {
       existing.socketId = socketId;
       existing.connected = true;
       existing.reconnectDeadline = null;
+      if (room.phase === "lobby" && avatarSchema.safeParse(avatarInput).success) existing.avatar = avatarInput!;
       if (existing.aiTakeover) {
         existing.isBot = false;
         existing.aiTakeover = false;
@@ -1034,7 +1036,7 @@ export class RoomManager {
     if (!this.passwordMatches(room, passwordInput)) throw new Error("Incorrect room password.");
     const name = nameSchema.parse(nameInput);
     if (room.managers.some(manager => manager.name.toLowerCase() === name.toLowerCase())) throw new Error("That manager name is already used in this room.");
-    const manager = this.manager(name, sessionId, socketId, false, false, room.settings.startingBudget, room.managers.length);
+    const manager = this.manager(name, sessionId, socketId, false, false, room.settings.startingBudget, room.managers.length, avatarInput);
     room.managers.push(manager);
     // Pool sizing is based on configured managerLimit while in the lobby, so a
     // join must not silently reroll or replace the host's visible player pool.

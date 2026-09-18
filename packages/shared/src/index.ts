@@ -598,8 +598,8 @@ export interface AuctionStatePatch {
 }
 
 export interface ClientToServerEvents {
-  "room:create": (payload: { name: string; sessionId: string; solo?: boolean; access?: RoomAccess; password?: string }, ack: Ack<{ code: string; managerId: string }>) => void;
-  "room:join": (payload: { code: string; name: string; sessionId: string; password?: string }, ack: Ack<{ code: string; managerId: string }>) => void;
+  "room:create": (payload: { name: string; avatar?: string; sessionId: string; solo?: boolean; access?: RoomAccess; password?: string }, ack: Ack<{ code: string; managerId: string }>) => void;
+  "room:join": (payload: { code: string; name: string; avatar?: string; sessionId: string; password?: string }, ack: Ack<{ code: string; managerId: string }>) => void;
   "rooms:list": (payload: { filters?: RoomDirectoryFilters }, ack: Ack<RoomDirectoryEntry[]>) => void;
   "room:updateAccess": (payload: { code: string; access: RoomAccess; password?: string }, ack: Ack<null>) => void;
   "room:resume": (payload: { code: string; sessionId: string }, ack: Ack<{ managerId: string }>) => void;

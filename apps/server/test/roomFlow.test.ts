@@ -49,6 +49,15 @@ describe("full squad room flow", () => {
     expect(finished.rankings.slice(0, 3).map(item => item.rank)).toEqual([1, 2, 3]);
   });
 
+  it("preserves a selected manager crest for hosts and guests", () => {
+    const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
+    const host = manager.create("BadgeHost", "session-badge-host", "socket-badge-host", false, "public", undefined, "crest-17");
+    const guest = manager.join(host.code, "BadgeGuest", "session-badge-guest", "socket-badge-guest", undefined, "crest-29");
+    const state = manager.getState(host.code);
+    expect(state.managers.find(item => item.id === host.managerId)?.avatar).toBe("crest-17");
+    expect(state.managers.find(item => item.id === guest.managerId)?.avatar).toBe("crest-29");
+  });
+
   it("expands Solo Practice to the maximum 8-manager room capacity", () => {
     const manager = new RoomManager(() => undefined, () => undefined, () => undefined);
     const created = manager.create("Host", "session-limit", "socket-limit", true);

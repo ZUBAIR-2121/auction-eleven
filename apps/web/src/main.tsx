@@ -102,6 +102,61 @@ function rememberManagerName(value: string): void {
   try { localStorage.setItem(SAVED_MANAGER_NAME_KEY, normalized); } catch { /* preferences can be unavailable */ }
 }
 
+const MANAGER_BADGES = [
+  ["crest-01", "Royal Crown"], ["crest-02", "Thunder Bolt"], ["crest-03", "North Star"], ["crest-04", "Iron Wings"], ["crest-05", "Lion Guard"],
+  ["crest-06", "Night Wolf"], ["crest-07", "Dragon Mark"], ["crest-08", "Golden Trident"], ["crest-09", "Fire Crest"], ["crest-10", "Diamond XI"],
+  ["crest-11", "Phoenix Rise"], ["crest-12", "Citadel"], ["crest-13", "Twin Blades"], ["crest-14", "Deep Anchor"], ["crest-15", "Comet Strike"],
+  ["crest-16", "Summit"], ["crest-17", "Night Moon"], ["crest-18", "Solar Eleven"], ["crest-19", "Phantom"], ["crest-20", "War Helm"],
+  ["crest-21", "Falcon Eye"], ["crest-22", "Fortress Shield"], ["crest-23", "Knight XI"], ["crest-24", "Compass"], ["crest-25", "Crowned Star"],
+  ["crest-26", "Sky Wings"], ["crest-27", "Emerald Serpent"], ["crest-28", "Black Fortress"], ["crest-29", "Claw Mark"], ["crest-30", "Eleven Elite"]
+] as const;
+const MANAGER_BADGE_IDS = new Set<string>(MANAGER_BADGES.map(([id]) => id));
+const SAVED_MANAGER_BADGE_KEY = "auction-eleven-manager-badge";
+const SFX_KEY = "auction-eleven-sfx";
+
+function readSavedManagerBadge(): string {
+  try {
+    const saved = localStorage.getItem(SAVED_MANAGER_BADGE_KEY) ?? "crest-01";
+    return MANAGER_BADGE_IDS.has(saved) ? saved : "crest-01";
+  } catch { return "crest-01"; }
+}
+
+function rememberManagerBadge(value: string): void {
+  if (!MANAGER_BADGE_IDS.has(value)) return;
+  try { localStorage.setItem(SAVED_MANAGER_BADGE_KEY, value); } catch { /* preferences can be unavailable */ }
+}
+
+function ManagerBadge({ avatar, label, size = "md" }: { avatar: string; label?: string; size?: "sm" | "md" | "lg" }) {
+  const isCrest = MANAGER_BADGE_IDS.has(avatar);
+  return <span className={`manager-badge manager-badge-${size}`} aria-label={label ? `${label} manager badge` : "Manager badge"}>{isCrest ? <img src={`/manager-badges/${avatar}.svg`} alt="" draggable={false} /> : <span>{avatar}</span>}</span>;
+}
+
+let sharedAudioContext: AudioContext | null = null;
+function playUiSfx(kind: "bid" | "tick" | "correct" | "wrong" | "sold" | "round"): void {
+  try {
+    if (localStorage.getItem(SFX_KEY) === "off") return;
+    const AudioCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtor) return;
+    sharedAudioContext ??= new AudioCtor();
+    const context = sharedAudioContext;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const now = context.currentTime;
+    const settings = {
+      bid: [420, .035, .035], tick: [760, .018, .018], correct: [980, .055, .06], wrong: [180, .035, .045], sold: [620, .07, .08], round: [520, .035, .045]
+    } as const;
+    const [frequency, volume, duration] = settings[kind];
+    oscillator.type = kind === "wrong" ? "sawtooth" : kind === "sold" ? "triangle" : "sine";
+    oscillator.frequency.setValueAtTime(frequency, now);
+    if (kind === "correct") oscillator.frequency.exponentialRampToValueAtTime(1320, now + duration);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(volume, now + .008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    oscillator.connect(gain); gain.connect(context.destination);
+    oscillator.start(now); oscillator.stop(now + duration + .02);
+  } catch { /* Audio is optional and must never interrupt gameplay. */ }
+}
+
 type PerformancePreference = "auto" | "quality" | "performance";
 type EffectivePerformanceMode = "quality" | "performance";
 
@@ -319,6 +374,7 @@ function App() {
   const [connected, setConnected] = useState(socket.connected);
   const [isLoading, setIsLoading] = useState(() => !sessionStorage.getItem("ae_intro_seen"));
   const [performancePreference, setPerformancePreference] = useState<PerformancePreference>(() => (localStorage.getItem("ae_performance") as PerformancePreference | null) ?? "auto");
+  const [sfxEnabled, setSfxEnabled] = useState(() => { try { return localStorage.getItem(SFX_KEY) !== "off"; } catch { return true; } });
   const ignoredRoomRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -347,6 +403,9 @@ function App() {
     document.documentElement.dataset.aePerformance = effectivePerformance;
     localStorage.setItem("ae_performance", performancePreference);
   }, [effectivePerformance, performancePreference]);
+  useEffect(() => {
+    try { localStorage.setItem(SFX_KEY, sfxEnabled ? "on" : "off"); } catch { /* preferences can be unavailable */ }
+  }, [sfxEnabled]);
 
   useEffect(() => {
     const handleConnect = () => {
@@ -521,7 +580,7 @@ function App() {
   return <div className="app-shell">
     <AnimatePresence>{isLoading && <LoadingScreen onComplete={finishLoading} />}</AnimatePresence>
     <div className="ambient-grid" /><div className="noise" />
-    <header className="topbar"><Brand />{state ? <button className="topbar-back" onClick={() => leave()}>← BACK TO MENU</button> : <nav><a href="#home">Home</a><a href="#how">How it works</a><a href="#play">Play</a></nav>}<div className="topbar-tools"><button className="performance-switch" title="Visual performance mode" onClick={() => setPerformancePreference(current => current === "auto" ? "quality" : current === "quality" ? "performance" : "auto")}>⚙ {performancePreference.toUpperCase()}</button><div className="status-pill"><i className={connected ? "online" : "offline"} />{connected ? "Live server" : "Reconnecting"}</div></div></header>
+    <header className="topbar"><Brand />{state ? <button className="topbar-back" onClick={() => leave()}>← BACK TO MENU</button> : <nav><a href="#home">Home</a><a href="#how">How it works</a><a href="#play">Play</a></nav>}<div className="topbar-tools"><button className="performance-switch" title="Sound effects" onClick={() => { setSfxEnabled(current => !current); playUiSfx("round"); }}>{sfxEnabled ? "🔊 SFX" : "🔇 SFX"}</button><button className="performance-switch" title="Visual performance mode" onClick={() => setPerformancePreference(current => current === "auto" ? "quality" : current === "quality" ? "performance" : "auto")}>⚙ {performancePreference.toUpperCase()}</button><div className="status-pill"><i className={connected ? "online" : "offline"} />{connected ? "Live server" : "Reconnecting"}</div></div></header>
     {error && <Toast message={error} close={() => setError("")} />}
     {reaction && <div className="reaction-pop"><b>{reaction.managerName}</b> {reaction.reaction}</div>}
     {state && managerId && <RoomChat socket={socket} state={state} managerId={managerId} setError={setError} />}
@@ -628,6 +687,7 @@ function PlayerHeroSlider({ performanceMode }: { performanceMode: EffectivePerfo
 
 function Landing({ socket, saveSeat, setError, performanceMode }: { socket: GameSocket; saveSeat: (code: string, id: string) => void; setError: (value: string) => void; performanceMode: EffectivePerformanceMode }) {
   const [name, setName] = useState(() => readSavedManagerName());
+  const [avatar, setAvatar] = useState(() => readSavedManagerBadge());
   const [code, setCode] = useState("");
   const [directPassword, setDirectPassword] = useState("");
   const [createAccess, setCreateAccess] = useState<RoomAccess>("public");
@@ -663,6 +723,7 @@ function Landing({ socket, saveSeat, setError, performanceMode }: { socket: Game
     setBusy(true);
     socket.emit("room:create", {
       name: normalizeManagerName(name),
+      avatar,
       sessionId,
       solo,
       access: solo ? "public" : createAccess,
@@ -671,6 +732,7 @@ function Landing({ socket, saveSeat, setError, performanceMode }: { socket: Game
       setBusy(false);
       if (response.ok) {
         rememberManagerName(name);
+        rememberManagerBadge(avatar);
         saveSeat(response.data.code, response.data.managerId);
       } else setError(response.error);
     });
@@ -683,10 +745,11 @@ function Landing({ socket, saveSeat, setError, performanceMode }: { socket: Game
       return;
     }
     setBusy(true);
-    socket.emit("room:join", { code, name: normalizeManagerName(name), sessionId, password: directPassword || undefined }, response => {
+    socket.emit("room:join", { code, name: normalizeManagerName(name), avatar, sessionId, password: directPassword || undefined }, response => {
       setBusy(false);
       if (response.ok) {
         rememberManagerName(name);
+        rememberManagerBadge(avatar);
         saveSeat(response.data.code, response.data.managerId);
       } else setError(response.error);
     });
@@ -720,6 +783,7 @@ function Landing({ socket, saveSeat, setError, performanceMode }: { socket: Game
       <section className="entry-card match-entry-card">
         <div className="card-glow" /><h3>Manager access</h3>
         <label>MANAGER NAME<input maxLength={18} value={name} onChange={event => setName(event.target.value)} placeholder="e.g. Shadow XI" autoComplete="nickname" /></label>
+        <div className="manager-badge-picker"><div className="badge-picker-head"><div><span>MANAGER CREST</span><strong>{MANAGER_BADGES.find(([id]) => id === avatar)?.[1] ?? "Royal Crown"}</strong></div><ManagerBadge avatar={avatar} label={name || "Manager"} size="lg" /></div><div className="badge-picker-grid" role="radiogroup" aria-label="Choose manager crest">{MANAGER_BADGES.map(([id, label]) => <button type="button" role="radio" aria-checked={avatar === id} title={label} className={avatar === id ? "active" : ""} onClick={() => setAvatar(id)} key={id}><ManagerBadge avatar={id} label={label} size="md" /><span>{label}</span></button>)}</div></div>
         <div className="access-choice" role="group" aria-label="Room access type">
           <button type="button" className={createAccess === "public" ? "active" : ""} onClick={() => setCreateAccess("public")}><span>◎</span><strong>OPEN ROOM</strong><small>Listed publicly · one-click join</small></button>
           <button type="button" className={createAccess === "password" ? "active" : ""} onClick={() => setCreateAccess("password")}><span>◆</span><strong>PASSWORD ROOM</strong><small>Listed publicly · password required</small></button>
@@ -734,11 +798,11 @@ function Landing({ socket, saveSeat, setError, performanceMode }: { socket: Game
       </section>
     </section>
     <footer className="landing-footer"><Brand /><span>Original football auction game · In-game credits have no monetary value.</span></footer>
-    <AnimatePresence>{directoryOpen && <RoomDirectory socket={socket} managerName={name} saveSeat={saveSeat} setError={setError} onClose={closeDirectory} />}</AnimatePresence>
+    <AnimatePresence>{directoryOpen && <RoomDirectory socket={socket} managerName={name} managerAvatar={avatar} saveSeat={saveSeat} setError={setError} onClose={closeDirectory} />}</AnimatePresence>
   </main>;
 }
 
-function RoomDirectory({ socket, managerName, saveSeat, setError, onClose }: { socket: GameSocket; managerName: string; saveSeat: (code: string, id: string) => void; setError: (value: string) => void; onClose: () => void }) {
+function RoomDirectory({ socket, managerName, managerAvatar, saveSeat, setError, onClose }: { socket: GameSocket; managerName: string; managerAvatar: string; saveSeat: (code: string, id: string) => void; setError: (value: string) => void; onClose: () => void }) {
   const [rooms, setRooms] = useState<RoomDirectoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [joiningCode, setJoiningCode] = useState("");
@@ -786,11 +850,12 @@ function RoomDirectory({ socket, managerName, saveSeat, setError, onClose }: { s
       return;
     }
     setJoiningCode(room.code);
-    socket.emit("room:join", { code: room.code, name: normalizedManagerName, sessionId, password: roomPassword }, response => {
+    socket.emit("room:join", { code: room.code, name: normalizedManagerName, avatar: managerAvatar, sessionId, password: roomPassword }, response => {
       setJoiningCode("");
       if (!response.ok) setError(response.error);
       else {
         rememberManagerName(normalizedManagerName);
+        rememberManagerBadge(managerAvatar);
         saveSeat(response.data.code, response.data.managerId);
       }
     });
@@ -895,7 +960,7 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
     <div ref={scrollAreaRef} className="ae-scroll-area" data-ae-scroll tabIndex={-1}>
     <div className="room-return-row"><button className="room-back-button" onClick={leave}><span>←</span><div><b>BACK TO GAME MENU</b><small>Leave this room safely</small></div></button></div>
     <div className="lobby-head"><div><div className="eyebrow">{state.isSolo ? "SOLO PRACTICE LOBBY" : state.access === "password" ? "PASSWORD MATCH LOBBY" : "PUBLIC MATCH LOBBY"}</div><h1>Managers’ Tunnel</h1><p>Each manager needs {starterCount} starters. The bench allows up to {substituteCount} optional substitute{substituteCount === 1 ? "" : "s"}. Maximum squad size: {totalSquadSize}.</p></div><div className="room-code"><span>ROOM CODE</span><strong>{state.code}</strong><button onClick={() => navigator.clipboard.writeText(state.code)}>COPY</button></div></div>
-    <div className="lobby-grid"><section className="panel managers-panel"><div className="panel-title"><h2>Room managers</h2><span>{state.managers.length}/{state.settings.managerLimit}</span></div><div className="manager-cards">{state.managers.map((manager, i) => <motion.div layout initial={{ opacity: 0, y: 18, scale: .97 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: .32, delay: Math.min(i, 8) * .05, ease: [0.22, 1, 0.36, 1] }} whileTap={{ scale: .98 }} className={`manager-card ${manager.ready ? "ready" : ""}`} key={manager.id}><div className="avatar">{manager.avatar}</div><div><strong>{manager.name}</strong><small>{manager.isHost ? "HOST" : manager.isBot ? "AI MANAGER" : "CHALLENGER"}</small></div><AnimatePresence mode="wait"><motion.div key={manager.ready ? "ready" : manager.connected ? "waiting" : "disconnected"} initial={{ opacity: 0, scale: .85 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: .85 }} transition={{ duration: .18 }} className="ready-tag">{manager.ready ? "READY" : manager.connected ? "WAITING" : "DISCONNECTED"}</motion.div></AnimatePresence>{isHost && !manager.connected && !manager.isHost && <button className="replace-ai" onClick={() => socket.emit("room:replaceWithAI", { code: state.code, managerId: manager.id }, response => { if (!response.ok) setError(response.error); })}>REPLACE WITH AI</button>}</motion.div>)}</div><div className="squad-rule-card"><b>{totalSquadSize}</b><div><strong>STARTING + BENCH LIMIT</strong><span>{starterCount} required starters + up to {substituteCount} optional substitute{substituteCount === 1 ? "" : "s"}</span></div></div></section>
+    <div className="lobby-grid"><section className="panel managers-panel"><div className="panel-title"><h2>Room managers</h2><span>{state.managers.length}/{state.settings.managerLimit}</span></div><div className="manager-cards">{state.managers.map((manager, i) => <motion.div layout initial={{ opacity: 0, y: 18, scale: .97 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: .32, delay: Math.min(i, 8) * .05, ease: [0.22, 1, 0.36, 1] }} whileTap={{ scale: .98 }} className={`manager-card ${manager.ready ? "ready" : ""}`} key={manager.id}><ManagerBadge avatar={manager.avatar} label={manager.name} size="lg" /><div><strong>{manager.name}</strong><small>{manager.isHost ? "HOST" : manager.isBot ? "AI MANAGER" : "CHALLENGER"}</small></div><AnimatePresence mode="wait"><motion.div key={manager.ready ? "ready" : manager.connected ? "waiting" : "disconnected"} initial={{ opacity: 0, scale: .85 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: .85 }} transition={{ duration: .18 }} className="ready-tag">{manager.ready ? "READY" : manager.connected ? "WAITING" : "DISCONNECTED"}</motion.div></AnimatePresence>{isHost && !manager.connected && !manager.isHost && <button className="replace-ai" onClick={() => socket.emit("room:replaceWithAI", { code: state.code, managerId: manager.id }, response => { if (!response.ok) setError(response.error); })}>REPLACE WITH AI</button>}</motion.div>)}</div><div className="squad-rule-card"><b>{totalSquadSize}</b><div><strong>STARTING + BENCH LIMIT</strong><span>{starterCount} required starters + up to {substituteCount} optional substitute{substituteCount === 1 ? "" : "s"}</span></div></div></section>
       <section className="panel settings"><div className="panel-title"><h2>Match setup</h2><span>{isHost ? "HOST CONTROL" : "LOCKED"}</span></div>
         <Setting label="Starting budget" value={`${state.settings.startingBudget}M`}><input disabled={!isHost} type="range" min="300" max="3000" step="50" value={state.settings.startingBudget} onChange={event => changeNumber("startingBudget", +event.target.value)} /></Setting>
         <Setting label="Auction timer" value={`${state.settings.auctionSeconds}s`}><input disabled={!isHost} type="range" min="10" max="30" step="1" value={state.settings.auctionSeconds} onChange={event => changeNumber("auctionSeconds", +event.target.value)} /></Setting>
@@ -1044,7 +1109,7 @@ function FootballerPhoto({ player, compact = false }: { player: Footballer; comp
     return () => { active = false; };
   }, [cacheKey, player, visible]);
 
-  return <div ref={containerRef} className={`footballer-photo ${compact ? "compact" : ""}`}>{photo ? <><img key={photo.url} src={photo.url} alt={`${player.name} footballer`} loading={compact ? "lazy" : "eager"} decoding="async" referrerPolicy="no-referrer" draggable={false} /><a href={photo.descriptionUrl} target="_blank" rel="noreferrer" title={`${photo.credit} • ${photo.license}`}>©</a></> : <div className="photo-placeholder"><span>{player.position === "GK" ? "🧤" : "⚽"}</span><small>{failed ? "PHOTO UNAVAILABLE" : visible ? "LOADING PHOTO" : "PHOTO READY"}</small></div>}</div>;
+  return <div ref={containerRef} className={`footballer-photo ${compact ? "compact" : ""}`}>{photo ? <>{!compact && <img className="footballer-photo-backdrop" aria-hidden="true" src={photo.url} alt="" decoding="async" referrerPolicy="no-referrer" draggable={false} />}<img className="footballer-photo-main" key={photo.url} src={photo.url} alt={`${player.name} footballer`} loading={compact ? "lazy" : "eager"} decoding="async" referrerPolicy="no-referrer" draggable={false} /><a href={photo.descriptionUrl} target="_blank" rel="noreferrer" title={`${photo.credit} • ${photo.license}`}>©</a></> : <div className="photo-placeholder"><span>{player.position === "GK" ? "🧤" : "⚽"}</span><small>{failed ? "PHOTO UNAVAILABLE" : visible ? "LOADING PHOTO" : "PHOTO READY"}</small></div>}</div>;
 }
 
 
@@ -1062,7 +1127,13 @@ function useCountdown(endsAt: number | null) {
 const AuctionTimer = React.memo(function AuctionTimer({ endsAt, durationSeconds }: { endsAt: number | null; durationSeconds: number }) {
   const seconds = useCountdown(endsAt);
   const progress = clamp(seconds / Math.max(1, durationSeconds) * 100, 0, 100);
-  return <div className="timer" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><div><strong>{Math.ceil(seconds)}</strong><span>SEC</span></div></div>;
+  const wholeSeconds = Math.ceil(seconds);
+  const previousWhole = useRef(wholeSeconds);
+  useEffect(() => {
+    if (wholeSeconds > 0 && wholeSeconds <= 5 && previousWhole.current !== wholeSeconds) playUiSfx("tick");
+    previousWhole.current = wholeSeconds;
+  }, [wholeSeconds]);
+  return <div className={`timer ${wholeSeconds <= 5 && wholeSeconds > 0 ? "critical" : ""}`} style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><div><strong>{wholeSeconds}</strong><span>SEC</span></div></div>;
 });
 
 const FormationClock = React.memo(function FormationClock({ endsAt }: { endsAt: number | null }) {
@@ -1224,6 +1295,8 @@ function BlindArena({ socket, state, managerId, setError, onDone }: { socket: Ga
         return;
       }
       setFeedback(response.data.message);
+      if (response.data.result === "correct") playUiSfx("correct");
+      else if (response.data.result === "incorrect" || response.data.result === "ambiguous") playUiSfx("wrong");
       if (response.data.result !== "rate_limited") setGuess("");
     });
   };
@@ -1236,7 +1309,7 @@ function BlindArena({ socket, state, managerId, setError, onDone }: { socket: Ga
       {blind.clues.length > 0 && <div className="blind-clues">{blind.clues.map(clue => <span key={clue.label}><small>{clue.label}</small><b>{clue.value}</b></span>)}</div>}
       {revealed && blind.status !== "guessing" && <div className="blind-revealed-name"><span>IT WAS</span><strong>{revealed.name}</strong><small>{getFootballerPrimaryRoles(revealed).join(" / ")} · {revealed.playerType === "ICON" ? "ICON" : "CURRENT"}</small></div>}
     </section>
-    <form className="blind-guess-dock" onSubmit={submitGuess}>
+    <form className={`blind-guess-dock ${feedback && !feedback.startsWith("Correct") ? "wrong-feedback" : feedback.startsWith("Correct") ? "correct-feedback" : ""}`} onSubmit={submitGuess}>
       <label><span>WHO IS THIS PLAYER?</span><input value={guess} onChange={event => setGuess(event.target.value)} disabled={blind.status !== "guessing" || sending || me.auctionComplete || completion.squadFull} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} enterKeyHint="go" maxLength={80} placeholder={me.auctionComplete ? "You are DONE" : "Type a player name…"} /></label>
       <button className="primary" type="submit" disabled={blind.status !== "guessing" || sending || !guess.trim() || me.auctionComplete || completion.squadFull}>{sending ? "CHECKING…" : "GUESS"}</button>
       {canComplete && <button type="button" className="complete-auction" onClick={onDone}>I'M DONE</button>}
@@ -1255,6 +1328,16 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
   const [historyOpen, setHistoryOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [compactMode, setCompactMode] = useState(() => localStorage.getItem("ae_compact") !== "0");
+  const previousBidForSfx = useRef(state.currentBid);
+  const previousRoundForSfx = useRef(state.roundId);
+  useEffect(() => {
+    if (state.currentBid > previousBidForSfx.current) playUiSfx("bid");
+    previousBidForSfx.current = state.currentBid;
+  }, [state.currentBid]);
+  useEffect(() => {
+    if (previousRoundForSfx.current && previousRoundForSfx.current !== state.roundId) playUiSfx("round");
+    previousRoundForSfx.current = state.roundId;
+  }, [state.roundId]);
   const toggleCompactMode = () => setCompactMode(current => {
     const next = !current;
     localStorage.setItem("ae_compact", next ? "1" : "0");
@@ -1375,7 +1458,7 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
       <aside className="panel manager-board compact-manager-board"><h3>MANAGERS</h3>{state.managers.map(manager => {
         const managerCompletion = getSquadCompletion(manager.squad, state.settings);
         const status = manager.aiTakeover ? "AI CONTROL · LEGENDARY" : !manager.connected && manager.reconnectDeadline ? "RECONNECTING…" : manager.auctionComplete ? "DONE ✓" : manager.isBot ? "AI MANAGER" : `${managerCompletion.completedStarters}/${starterCount} starters`;
-        return <motion.div layout animate={manager.id === state.highestBidderId ? { scale: [1, 1.03, 1] } : { scale: 1 }} transition={{ duration: .4, ease: [0.22, 1, 0.36, 1] }} className={`manager-line ${manager.id === state.highestBidderId ? "leading" : ""} ${manager.id === managerId ? "you" : ""}`} key={manager.id}><span className="mini-avatar">{manager.avatar}</span><div><b>{manager.name}</b><small>{status}</small></div><strong className={manager.id === managerId ? "own-budget" : "private-budget"}>{manager.id === managerId ? money(myBudget) : "PRIVATE"}</strong></motion.div>;
+        return <motion.div layout animate={manager.id === state.highestBidderId ? { scale: [1, 1.03, 1] } : { scale: 1 }} transition={{ duration: .4, ease: [0.22, 1, 0.36, 1] }} className={`manager-line ${manager.id === state.highestBidderId ? "leading" : ""} ${manager.id === managerId ? "you" : ""}`} key={manager.id}><ManagerBadge avatar={manager.avatar} label={manager.name} size="sm" /><div><b>{manager.name}</b><small>{status}</small></div><strong className={manager.id === managerId ? "own-budget" : "private-budget"}>{manager.id === managerId ? money(myBudget) : "PRIVATE"}</strong></motion.div>;
       })}</aside>
       <section className="auction-stage compact-auction-stage">{state.currentFootballer && <PlayerCard player={state.currentFootballer} compactAuction iconSurprise={state.settings.playerPoolMode === "mixed" && state.settings.iconSurprise} onDetails={() => setDetailsOpen(true)} />}<div className="compact-live-info"><div className="current-price compact-current-price"><span>{state.currentBid ? "CURRENT HIGHEST BID" : "OPENING BID"}</span><AnimatePresence mode="popLayout"><motion.strong key={state.currentBid || openingBid} initial={{ opacity: 0, y: -10, scale: 1.12 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10 }} transition={{ duration: .28, ease: [0.22, 1, 0.36, 1] }}>{money(state.currentBid || openingBid)}</motion.strong></AnimatePresence><AnimatePresence mode="wait"><motion.p key={leader ? leader.name : "none"} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>{leader ? leader.name : "No accepted bid yet"}</motion.p></AnimatePresence></div><div className="own-money-chip"><span>YOUR MONEY</span><b>{money(myBudget)}</b><small>STARTERS {completion.completedStarters}/{completion.requiredStarters} · SUBS {completion.currentSubstitutes}/{completion.maxSubstitutes}</small>{insufficientForMinimum && <em>Not enough money for the next bid — PASS is still available.</em>}{invalidManualBid && <em>Enter a legal bid within your budget using {state.settings.bidIncrement}M increments.</em>}</div></div></section>
     </div>
@@ -1398,8 +1481,10 @@ function Arena({ socket, state, managerId, setError, leave }: { socket: GameSock
 function RoundResult({ state }: { state: RoomState }) {
   const blindWinner = Boolean(state.lastWinner?.blind);
   const revealedBlind = state.settings.gameMode === "blind" ? state.blindRound?.revealedFootballer : null;
+  const winnerManager = state.lastWinner ? state.managers.find(manager => manager.name === state.lastWinner?.managerName) : null;
+  useEffect(() => { playUiSfx(state.lastWinner ? "sold" : "round"); }, [state.roundId]);
   const label = blindWinner ? "FIRST CORRECT GUESS" : state.lastWinner?.automatic ? "AUTO SIGNED" : state.lastWinner ? "SOLD!" : state.settings.gameMode === "blind" ? "FULL REVEAL" : state.settings.reauctionUnsold ? "UNSOLD · LATER ROUND" : "SKIPPED";
-  return <main className="round-result"><div className="result-burst">{label}</div>{state.lastWinner ? <><div className="winner-avatar">{blindWinner ? "👁" : state.lastWinner.automatic ? "⚙️" : "🏆"}</div><h1>{state.lastWinner.footballerName}</h1><p>{blindWinner ? <><strong>{state.lastWinner.managerName}</strong> guessed first{state.lastWinner.guessedAtMs !== undefined ? ` in ${(state.lastWinner.guessedAtMs / 1000).toFixed(2)}s` : ""}.</> : <>{state.lastWinner.automatic ? "assigned to complete the squad of" : "joins"} <strong>{state.lastWinner.managerName}</strong></>}</p>{!blindWinner && <div className="sold-price">{money(state.lastWinner.amount)}</div>}</> : revealedBlind ? <><div className="winner-avatar">👁</div><h1>{revealedBlind.name}</h1><p>Nobody guessed correctly. {state.settings.blindNoGuess === "quick_auction" ? "A quick auction follows." : "This footballer is skipped."}</p></> : <><h1>No manager bid</h1><p>{state.settings.reauctionUnsold ? "This footballer may return after the normal auction pool ends." : "This footballer is removed from this match."}</p></>}<div className="loading-bar"><i /></div></main>;
+  return <main className="round-result"><div className="result-burst">{label}</div>{state.lastWinner ? <><div className="winner-avatar">{winnerManager ? <ManagerBadge avatar={winnerManager.avatar} label={winnerManager.name} size="lg" /> : blindWinner ? "👁" : state.lastWinner.automatic ? "⚙️" : "🏆"}</div><h1>{state.lastWinner.footballerName}</h1><p>{blindWinner ? <><strong>{state.lastWinner.managerName}</strong> guessed first{state.lastWinner.guessedAtMs !== undefined ? ` in ${(state.lastWinner.guessedAtMs / 1000).toFixed(2)}s` : ""}.</> : <>{state.lastWinner.automatic ? "assigned to complete the squad of" : "joins"} <strong>{state.lastWinner.managerName}</strong></>}</p>{!blindWinner && <div className="sold-price">{money(state.lastWinner.amount)}</div>}</> : revealedBlind ? <><div className="winner-avatar">👁</div><h1>{revealedBlind.name}</h1><p>Nobody guessed correctly. {state.settings.blindNoGuess === "quick_auction" ? "A quick auction follows." : "This footballer is skipped."}</p></> : <><h1>No manager bid</h1><p>{state.settings.reauctionUnsold ? "This footballer may return after the normal auction pool ends." : "This footballer is removed from this match."}</p></>}<div className="loading-bar"><i /></div></main>;
 }
 
 function rolePosition(role: LineupRole): Position {
@@ -1755,7 +1840,7 @@ function FormationRoom({ socket, state, managerId, setError, leave }: { socket: 
   };
   const quitSolo = () => leave();
 
-  if (me.lineupSubmitted) return <main className="formation-wait page"><div className="formation-wait-card"><div className="formation-check">✓</div><div className="eyebrow">LINEUP LOCKED</div><h1>{FORMATION_BY_ID.get(me.formationId ?? "")?.name}</h1><p>Your {starterTarget}-player formation{substituteTarget ? ` and ${substituteTarget} substitute${substituteTarget === 1 ? "" : "s"}` : ""} are ready. Waiting for the remaining managers.</p><div className="submission-progress"><span>{selectedManagerCount}/{state.managers.length} submitted</span><i><b style={{ width: `${selectedManagerCount / state.managers.length * 100}%` }} /></i></div><div className="formation-manager-status">{state.managers.map(manager => <span className={manager.lineupSubmitted ? "done" : ""} key={manager.id}>{manager.avatar} {manager.name} <b>{manager.lineupSubmitted ? "READY" : "CHOOSING"}</b></span>)}</div>{state.isSolo && <button className="danger-outline" onClick={quitSolo}>Quit Solo Match</button>}</div></main>;
+  if (me.lineupSubmitted) return <main className="formation-wait page"><div className="formation-wait-card"><div className="formation-check">✓</div><div className="eyebrow">LINEUP LOCKED</div><h1>{FORMATION_BY_ID.get(me.formationId ?? "")?.name}</h1><p>Your {starterTarget}-player formation{substituteTarget ? ` and ${substituteTarget} substitute${substituteTarget === 1 ? "" : "s"}` : ""} are ready. Waiting for the remaining managers.</p><div className="submission-progress"><span>{selectedManagerCount}/{state.managers.length} submitted</span><i><b style={{ width: `${selectedManagerCount / state.managers.length * 100}%` }} /></i></div><div className="formation-manager-status">{state.managers.map(manager => <span className={manager.lineupSubmitted ? "done" : ""} key={manager.id}><ManagerBadge avatar={manager.avatar} label={manager.name} size="sm" /> {manager.name} <b>{manager.lineupSubmitted ? "READY" : "CHOOSING"}</b></span>)}</div>{state.isSolo && <button className="danger-outline" onClick={quitSolo}>Quit Solo Match</button>}</div></main>;
 
   const dragged = draggingPlayer ? playerMap.get(draggingPlayer) : null;
   return <main className="formation-page page"><header className="formation-header"><div><div className="eyebrow">POST-AUCTION TEAM SETUP</div><h1>Choose formation & assemble your team</h1><p>Tap two players to swap, or drag with mouse, touch, or stylus. Primary and supported roles receive the best rating.</p></div><FormationClock endsAt={state.formationEndsAt} /></header>
@@ -1875,7 +1960,7 @@ function RoomChat({ socket, state, managerId, setError }: { socket: GameSocket; 
       <header><div><span>ROOM CHAT</span><strong>Auction Eleven</strong></div><div className="chat-online"><i />{state.managers.filter(manager => manager.connected).length} online</div><button aria-label="Close chat" onClick={() => { setEmojiOpen(false); closeChat(); }}>×</button></header>
       <div className="chat-messages" aria-live="polite">{messages.length === 0 ? <div className="chat-empty"><span>💬</span><b>Start the room conversation</b><p>Use the full keyboard, press Enter to send, or add an emoji.</p></div> : messages.map(message => {
         const own = message.managerId === managerId;
-        return <div className={`chat-row ${own ? "own" : ""}`} key={message.id}>{!own && <span className="chat-avatar">{message.avatar}</span>}<div className="chat-bubble">{!own && <b>{message.managerName}</b>}<p>{message.text}</p><small>{new Date(message.sentAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{own ? " ✓" : ""}</small></div></div>;
+        return <div className={`chat-row ${own ? "own" : ""}`} key={message.id}>{!own && <ManagerBadge avatar={message.avatar} label={message.managerName} size="sm" />}<div className="chat-bubble">{!own && <b>{message.managerName}</b>}<p>{message.text}</p><small>{new Date(message.sentAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{own ? " ✓" : ""}</small></div></div>;
       })}<div ref={bottomRef} /></div>
       <div className="typing-line">{typingNames.length ? `${typingNames.slice(0, 2).join(" and ")} ${typingNames.length > 1 ? "are" : "is"} typing…` : ""}</div>
       {emojiOpen && <div className="emoji-picker" role="toolbar" aria-label="Emoji picker">{CHAT_EMOJIS.map(emoji => <button type="button" onClick={() => addEmoji(emoji)} aria-label={`Add ${emoji}`} key={emoji}>{emoji}</button>)}</div>}
@@ -1915,7 +2000,7 @@ function Results({ state, managerId, leave }: { state: RoomState; managerId: str
       <div className="results-grid"><section className="panel leaderboard"><div className="panel-title"><h2>Final leaderboard</h2><span>SERVER RANKED</span></div>{state.rankings.map((result, i) => <motion.div initial={{ opacity: 0, x: -24 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: .3, delay: .1 + i * .05, ease: [0.22, 1, 0.36, 1] }} className={`rank-row ${result.managerId === managerId ? "you" : ""}`} key={result.managerId}><strong>#{result.rank}</strong><div><b>{result.managerName}</b><small>{result.formationName} · Fit {result.lineupFit} · Depth {result.benchStrength}</small></div><span>{result.score}</span></motion.div>)}</section><section className="panel awards"><div className="panel-title"><h2>Awards</h2><span>MATCH HIGHLIGHTS</span></div>{state.awards.map((award, i) => <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .3, delay: .15 + i * .06, ease: [0.22, 1, 0.36, 1] }} className="award" key={award.title}><div>✦</div><p><span>{award.title}</span><b>{award.managerName}</b><small>{award.detail}</small></p></motion.div>)}</section></div>
       <section className="squads"><h2>Final squads · {starterCount} starters + substitutes</h2><div className="squad-grid">{state.managers.map((manager, i) => {
         const starters = new Set(manager.lineup.map(item => item.footballerId));
-        return <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .35, delay: .1 + i * .07, ease: [0.22, 1, 0.36, 1] }} className="squad" key={manager.id}><div><span>{manager.avatar}</span><h3>{manager.name}</h3><b>{FORMATION_BY_ID.get(manager.formationId ?? "")?.name ?? "Formation"}</b></div><h4>STARTING TEAM · {starterCount}</h4>{manager.squad.filter(entry => starters.has(entry.footballer.id)).map(entry => <SquadRow entry={entry} key={entry.footballer.id} />)}{manager.squad.length > starterCount && <><h4>SUBSTITUTES · {manager.squad.length - starterCount}</h4>{manager.squad.filter(entry => !starters.has(entry.footballer.id)).map(entry => <SquadRow entry={entry} key={entry.footballer.id} />)}</>}</motion.div>;
+        return <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .35, delay: .1 + i * .07, ease: [0.22, 1, 0.36, 1] }} className="squad" key={manager.id}><div><ManagerBadge avatar={manager.avatar} label={manager.name} size="lg" /><h3>{manager.name}</h3><b>{FORMATION_BY_ID.get(manager.formationId ?? "")?.name ?? "Formation"}</b></div><h4>STARTING TEAM · {starterCount}</h4>{manager.squad.filter(entry => starters.has(entry.footballer.id)).map(entry => <SquadRow entry={entry} key={entry.footballer.id} />)}{manager.squad.length > starterCount && <><h4>SUBSTITUTES · {manager.squad.length - starterCount}</h4>{manager.squad.filter(entry => !starters.has(entry.footballer.id)).map(entry => <SquadRow entry={entry} key={entry.footballer.id} />)}</>}</motion.div>;
       })}</div></section>
       <div className="result-actions"><button className="primary" onClick={() => navigator.clipboard.writeText(`Auction Eleven winner: ${winner?.managerName} — ${winner?.formationName} — ${winner?.score} points!`)}>Copy Result</button><button className="secondary" onClick={leave}>New Match</button></div>
     </div>

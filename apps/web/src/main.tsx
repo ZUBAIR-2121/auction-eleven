@@ -142,7 +142,7 @@ const SFX_FILES = {
   ready: "/sfx/ready.wav"
 } as const;
 type UiSfxKind = keyof typeof SFX_FILES;
-const SFX_VOLUMES: Record<UiSfxKind, number> = { ui: .26, bid: .5, tick: .42, correct: .64, wrong: .54, sold: .68, round: .52, ready: .52 };
+const SFX_VOLUMES: Record<UiSfxKind, number> = { ui: .72, bid: .96, tick: .82, correct: 1, wrong: .92, sold: 1, round: .94, ready: .9 };
 const sfxAudioCache = new Map<UiSfxKind, HTMLAudioElement[]>();
 let uiAudioUnlocked = false;
 
@@ -186,7 +186,7 @@ function playFallbackTone(kind: UiSfxKind): void {
     oscillator.frequency.setValueAtTime(frequency[kind], now);
     if (kind === "correct" || kind === "ready") oscillator.frequency.exponentialRampToValueAtTime(frequency[kind] * 1.45, now + .16);
     gain.gain.setValueAtTime(.0001, now);
-    gain.gain.exponentialRampToValueAtTime(kind === "tick" ? .035 : .065, now + .008);
+    gain.gain.exponentialRampToValueAtTime(kind === "tick" ? .085 : .14, now + .008);
     gain.gain.exponentialRampToValueAtTime(.0001, now + (kind === "sold" ? .32 : .18));
     oscillator.connect(gain); gain.connect(context.destination);
     oscillator.start(now); oscillator.stop(now + (kind === "sold" ? .36 : .22));

@@ -131,30 +131,80 @@ function ManagerBadge({ avatar, label, size = "md" }: { avatar: string; label?: 
   return <span className={`manager-badge manager-badge-${size}`} aria-label={label ? `${label} manager badge` : "Manager badge"}>{isCrest ? <img src={`/manager-badges/${avatar}.svg`} alt="" draggable={false} /> : <span>{avatar}</span>}</span>;
 }
 
-let sharedAudioContext: AudioContext | null = null;
-function playUiSfx(kind: "bid" | "tick" | "correct" | "wrong" | "sold" | "round"): void {
+const SFX_FILES = {
+  ui: "/sfx/ui-click.wav",
+  bid: "/sfx/bid.wav",
+  tick: "/sfx/tick.wav",
+  correct: "/sfx/correct.wav",
+  wrong: "/sfx/wrong.wav",
+  sold: "/sfx/sold.wav",
+  round: "/sfx/round.wav",
+  ready: "/sfx/ready.wav"
+} as const;
+type UiSfxKind = keyof typeof SFX_FILES;
+const SFX_VOLUMES: Record<UiSfxKind, number> = { ui: .26, bid: .5, tick: .42, correct: .64, wrong: .54, sold: .68, round: .52, ready: .52 };
+const sfxAudioCache = new Map<UiSfxKind, HTMLAudioElement[]>();
+let uiAudioUnlocked = false;
+
+function sfxIsEnabled(): boolean {
+  try { return localStorage.getItem(SFX_KEY) !== "off"; } catch { return true; }
+}
+
+function getSfxChannel(kind: UiSfxKind): HTMLAudioElement {
+  const pool = sfxAudioCache.get(kind) ?? [];
+  let audio = pool.find(item => item.paused || item.ended);
+  if (!audio) {
+    audio = new Audio(SFX_FILES[kind]);
+    audio.preload = "auto";
+    audio.volume = SFX_VOLUMES[kind];
+    pool.push(audio);
+    if (pool.length > 4) pool.shift();
+    sfxAudioCache.set(kind, pool);
+  }
+  return audio;
+}
+
+function primeUiAudio(): void {
+  if (uiAudioUnlocked) return;
+  uiAudioUnlocked = true;
+  (Object.keys(SFX_FILES) as UiSfxKind[]).forEach(kind => {
+    try { getSfxChannel(kind).load(); } catch { /* optional audio */ }
+  });
+}
+
+function playFallbackTone(kind: UiSfxKind): void {
   try {
-    if (localStorage.getItem(SFX_KEY) === "off") return;
     const AudioCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtor) return;
-    sharedAudioContext ??= new AudioCtor();
-    const context = sharedAudioContext;
+    const context = new AudioCtor();
+    void context.resume();
     const oscillator = context.createOscillator();
     const gain = context.createGain();
     const now = context.currentTime;
-    const settings = {
-      bid: [420, .035, .035], tick: [760, .018, .018], correct: [980, .055, .06], wrong: [180, .035, .045], sold: [620, .07, .08], round: [520, .035, .045]
-    } as const;
-    const [frequency, volume, duration] = settings[kind];
+    const frequency: Record<UiSfxKind, number> = { ui: 720, bid: 430, tick: 1100, correct: 920, wrong: 175, sold: 560, round: 510, ready: 760 };
     oscillator.type = kind === "wrong" ? "sawtooth" : kind === "sold" ? "triangle" : "sine";
-    oscillator.frequency.setValueAtTime(frequency, now);
-    if (kind === "correct") oscillator.frequency.exponentialRampToValueAtTime(1320, now + duration);
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(volume, now + .008);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    oscillator.frequency.setValueAtTime(frequency[kind], now);
+    if (kind === "correct" || kind === "ready") oscillator.frequency.exponentialRampToValueAtTime(frequency[kind] * 1.45, now + .16);
+    gain.gain.setValueAtTime(.0001, now);
+    gain.gain.exponentialRampToValueAtTime(kind === "tick" ? .035 : .065, now + .008);
+    gain.gain.exponentialRampToValueAtTime(.0001, now + (kind === "sold" ? .32 : .18));
     oscillator.connect(gain); gain.connect(context.destination);
-    oscillator.start(now); oscillator.stop(now + duration + .02);
-  } catch { /* Audio is optional and must never interrupt gameplay. */ }
+    oscillator.start(now); oscillator.stop(now + (kind === "sold" ? .36 : .22));
+    oscillator.addEventListener("ended", () => void context.close(), { once: true });
+  } catch { /* optional audio */ }
+}
+
+function playUiSfx(kind: UiSfxKind, force = false): void {
+  if (!force && !sfxIsEnabled()) return;
+  try {
+    primeUiAudio();
+    const audio = getSfxChannel(kind);
+    audio.pause();
+    audio.currentTime = 0;
+    audio.volume = SFX_VOLUMES[kind];
+    const result = audio.play();
+    if (result) void result.catch(() => playFallbackTone(kind));
+  } catch { playFallbackTone(kind); }
 }
 
 type PerformancePreference = "auto" | "quality" | "performance";
@@ -406,6 +456,17 @@ function App() {
   useEffect(() => {
     try { localStorage.setItem(SFX_KEY, sfxEnabled ? "on" : "off"); } catch { /* preferences can be unavailable */ }
   }, [sfxEnabled]);
+  useEffect(() => {
+    const unlock = () => primeUiAudio();
+    const buttonSfx = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("button, a, [role='button']")) playUiSfx("ui");
+    };
+    window.addEventListener("pointerdown", unlock, { once: true, passive: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    document.addEventListener("pointerdown", buttonSfx, { passive: true });
+    return () => { document.removeEventListener("pointerdown", buttonSfx); };
+  }, []);
 
   useEffect(() => {
     const handleConnect = () => {
@@ -580,7 +641,7 @@ function App() {
   return <div className="app-shell">
     <AnimatePresence>{isLoading && <LoadingScreen onComplete={finishLoading} />}</AnimatePresence>
     <div className="ambient-grid" /><div className="noise" />
-    <header className="topbar"><Brand />{state ? <button className="topbar-back" onClick={() => leave()}>← BACK TO MENU</button> : <nav><a href="#home">Home</a><a href="#how">How it works</a><a href="#play">Play</a></nav>}<div className="topbar-tools"><button className="performance-switch" title="Sound effects" onClick={() => { setSfxEnabled(current => !current); playUiSfx("round"); }}>{sfxEnabled ? "🔊 SFX" : "🔇 SFX"}</button><button className="performance-switch" title="Visual performance mode" onClick={() => setPerformancePreference(current => current === "auto" ? "quality" : current === "quality" ? "performance" : "auto")}>⚙ {performancePreference.toUpperCase()}</button><div className="status-pill"><i className={connected ? "online" : "offline"} />{connected ? "Live server" : "Reconnecting"}</div></div></header>
+    <header className="topbar"><Brand />{state ? <button className="topbar-back" onClick={() => leave()}>← BACK TO MENU</button> : <nav><a href="#home">Home</a><a href="#how">How it works</a><a href="#play">Play</a></nav>}<div className="topbar-tools"><button className={`performance-switch ${sfxEnabled ? "sfx-on" : "sfx-off"}`} title="Sound effects" onClick={() => { const next = !sfxEnabled; setSfxEnabled(next); try { localStorage.setItem(SFX_KEY, next ? "on" : "off"); } catch { /* optional preference */ } if (next) { primeUiAudio(); window.setTimeout(() => playUiSfx("ready", true), 0); } }}>{sfxEnabled ? "🔊 SFX ON" : "🔇 SFX OFF"}</button><button className="performance-switch" title="Visual performance mode" onClick={() => setPerformancePreference(current => current === "auto" ? "quality" : current === "quality" ? "performance" : "auto")}>⚙ {performancePreference.toUpperCase()}</button><div className="status-pill"><i className={connected ? "online" : "offline"} />{connected ? "Live server" : "Reconnecting"}</div></div></header>
     {error && <Toast message={error} close={() => setError("")} />}
     {reaction && <div className="reaction-pop"><b>{reaction.managerName}</b> {reaction.reaction}</div>}
     {state && managerId && <RoomChat socket={socket} state={state} managerId={managerId} setError={setError} />}
@@ -616,7 +677,7 @@ function LoadingScreen({ onComplete }: { onComplete: () => void }) {
   </motion.div>;
 }
 
-function Brand() { return <a href="#home" className="brand"><div className="brand-mark"><span>11</span></div><div><strong>WINNING</strong><em>ELEVEN</em></div></a>; }
+function Brand() { return <a href="#home" className="brand"><div className="brand-mark"><span>11</span></div><div><strong>AUCTION</strong><em>ELEVEN</em></div></a>; }
 function Toast({ message, close }: { message: string; close: () => void }) { return <div className="toast"><span>!</span><p>{message}</p><button onClick={close}>×</button></div>; }
 
 function HeroVideo({ performanceMode }: { performanceMode: EffectivePerformanceMode }) {
@@ -755,49 +816,27 @@ function Landing({ socket, saveSeat, setError, performanceMode }: { socket: Game
     });
   };
 
-  return <main className="landing" id="home">
-    <section className="landing-hero">
-      <HeroVideo performanceMode={performanceMode} /><div className="hero-shade" /><div className="hero-fade" /><div className="hero-green-grid" aria-hidden="true" />
-      <div className="hero-layout"><div className="hero-content" ref={copyRef}>
-        <div className="eyebrow">THE NEXT-GEN FOOTBALL AUCTION EXPERIENCE · 2026</div>
-        <h1 ref={titleRef}>Win the market.<br /><span>Build the eleven.</span></h1>
-        <p>Fast live auctions, tactical squad building, public room discovery, password-protected lobbies, and a server-ranked final podium.</p>
-        <div className="hero-actions"><a className="primary" href="#play">Enter match hub</a><button className="secondary" onClick={() => setDirectoryOpen(true)}>Find live rooms</button></div>
-        <div className="feature-row"><span>Public + locked rooms</span><span>OVR + normal pricing</span><span>2–8 managers</span></div>
-      </div>
-      <PlayerHeroSlider performanceMode={performanceMode} /></div><div className="scroll-indicator"><span>SCROLL</span><i /></div>
-    </section>
-
-    <section className="landing-section" id="how">
-      <div className="section-kicker"><i /> GAME FLOW</div>
-      <div className="section-heading"><h2>Every screen built for <em>fast decisions.</em></h2><p>A responsive football-game interface designed for desktop, tablet, and mobile without forcing landscape orientation.</p></div>
-      <div className="bento-grid">
-        <article className="bento-card bento-wide"><span>01</span><h3>Create your lobby</h3><p>Launch an open room anyone can discover, or protect the room with a password while keeping it visible in the browser.</p><b>PUBLIC + PASSWORD ACCESS</b></article>
-        <article className="bento-card"><span>02</span><h3>Bid with context</h3><p>See opening value, squad needs, live rivals, private budgets, and position coverage while every round is moving.</p><b>LIVE AUCTION INTELLIGENCE</b></article>
-        <article className="bento-card"><span>03</span><h3>Build the formation</h3><p>Drag starters and substitutes across the pitch on mouse or touch, then lock your tactical lineup for server scoring.</p><b>MOBILE DRAG SYSTEM</b></article>
-      </div>
-    </section>
-
-    <section className="play-section" id="play">
-      <div className="play-copy"><div className="section-kicker"><i /> MATCH HUB</div><h2>Choose how the room <em>opens.</em></h2><p>Open rooms appear in Find Room and join instantly. Password rooms are also listed, but require the correct password before a seat is granted.</p></div>
-      <section className="entry-card match-entry-card">
-        <div className="card-glow" /><h3>Manager access</h3>
-        <label>MANAGER NAME<input maxLength={18} value={name} onChange={event => setName(event.target.value)} placeholder="e.g. Shadow XI" autoComplete="nickname" /></label>
-        <div className="manager-badge-picker"><div className="badge-picker-head"><div><span>MANAGER CREST</span><strong>{MANAGER_BADGES.find(([id]) => id === avatar)?.[1] ?? "Royal Crown"}</strong></div><ManagerBadge avatar={avatar} label={name || "Manager"} size="lg" /></div><div className="badge-picker-grid" role="radiogroup" aria-label="Choose manager crest">{MANAGER_BADGES.map(([id, label]) => <button type="button" role="radio" aria-checked={avatar === id} title={label} className={avatar === id ? "active" : ""} onClick={() => setAvatar(id)} key={id}><ManagerBadge avatar={id} label={label} size="md" /><span>{label}</span></button>)}</div></div>
-        <div className="access-choice" role="group" aria-label="Room access type">
-          <button type="button" className={createAccess === "public" ? "active" : ""} onClick={() => setCreateAccess("public")}><span>◎</span><strong>OPEN ROOM</strong><small>Listed publicly · one-click join</small></button>
-          <button type="button" className={createAccess === "password" ? "active" : ""} onClick={() => setCreateAccess("password")}><span>◆</span><strong>PASSWORD ROOM</strong><small>Listed publicly · password required</small></button>
-        </div>
+  return <main className="landing premium-landing" id="home">
+    <section className="manager-home-shell">
+      <section className="manager-create-panel">
+        <div className="manager-create-heading"><div className="section-kicker"><i /> CREATE YOUR MANAGER</div><h1>Choose your name<br /><em>and club crest.</em></h1><p>Your manager identity follows you through the lobby, auctions, squad screens and final results.</p></div>
+        <label className="manager-name-field">MANAGER NAME<input maxLength={18} value={name} onChange={event => setName(event.target.value)} placeholder="e.g. Shadow XI" autoComplete="nickname" /></label>
+        <div className="manager-badge-picker home-badge-picker"><div className="badge-picker-head"><div><span>SELECT YOUR CLUB BADGE</span><strong>{MANAGER_BADGES.find(([id]) => id === avatar)?.[1] ?? "Royal Crown"}</strong></div><ManagerBadge avatar={avatar} label={name || "Manager"} size="lg" /></div><div className="badge-picker-grid" role="radiogroup" aria-label="Choose manager crest">{MANAGER_BADGES.map(([id, label]) => <button type="button" role="radio" aria-checked={avatar === id} title={label} className={avatar === id ? "active" : ""} onClick={() => setAvatar(id)} key={id}><ManagerBadge avatar={id} label={label} size="md" /><span>{label}</span></button>)}</div></div>
+        <div className="access-choice premium-access-choice" role="group" aria-label="Room access type"><button type="button" className={createAccess === "public" ? "active" : ""} onClick={() => setCreateAccess("public")}><span>◎</span><strong>OPEN ROOM</strong><small>Public lobby · instant join</small></button><button type="button" className={createAccess === "password" ? "active" : ""} onClick={() => setCreateAccess("password")}><span>◆</span><strong>PASSWORD ROOM</strong><small>Visible · password protected</small></button></div>
         <AnimatePresence initial={false}>{createAccess === "password" && <motion.label initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="password-field">ROOM PASSWORD<input type="password" minLength={4} maxLength={32} value={createPassword} onChange={event => setCreatePassword(event.target.value)} placeholder="4–32 characters" autoComplete="new-password" /></motion.label>}</AnimatePresence>
-        <button className="primary create-room-button" disabled={busy} onClick={() => createRoom(false)}>Create {createAccess === "password" ? "password" : "open"} room <b>↗</b></button>
-        <button className="secondary" disabled={busy} onClick={() => createRoom(true)}>Solo practice vs AI</button>
-        <div className="divider"><span>JOIN DIRECTLY</span></div>
-        <div className="direct-join-grid"><input className="code-input" maxLength={6} value={code} onChange={event => setCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))} placeholder="ROOM CODE" aria-label="Room code" /><input type="password" maxLength={32} value={directPassword} onChange={event => setDirectPassword(event.target.value)} placeholder="PASSWORD IF NEEDED" aria-label="Room password" /><button disabled={busy || code.length < 6} onClick={joinCode}>JOIN</button></div>
-        <button className="room-browser-launch" type="button" onClick={() => setDirectoryOpen(true)}><span>⌕</span><div><strong>FIND ROOM</strong><small>Browse open and password lobbies</small></div><b>→</b></button>
-        <small>Room passwords are verified by the server and are never included in public room data.</small>
+        <div className="manager-create-actions"><button className="primary" disabled={busy} onClick={() => createRoom(false)}>CREATE ROOM <b>↗</b></button><button className="secondary" disabled={busy} onClick={() => createRoom(true)}>SOLO VS AI</button></div>
+        <div className="manager-direct-join"><div><span>JOIN A ROOM</span><small>Have a code already?</small></div><input className="code-input" maxLength={6} value={code} onChange={event => setCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))} placeholder="ROOM CODE" aria-label="Room code" /><input type="password" maxLength={32} value={directPassword} onChange={event => setDirectPassword(event.target.value)} placeholder="PASSWORD" aria-label="Room password" /><button disabled={busy || code.length < 6} onClick={joinCode}>JOIN</button></div>
+        <button className="room-browser-launch premium-room-browser" type="button" onClick={() => setDirectoryOpen(true)}><span>⌕</span><div><strong>FIND LIVE ROOMS</strong><small>Browse open and password lobbies</small></div><b>→</b></button>
+      </section>
+      <section className="manager-hero-panel">
+        <HeroVideo performanceMode={performanceMode} /><div className="hero-shade" /><div className="hero-fade" /><div className="hero-green-grid" aria-hidden="true" />
+        <div className="manager-hero-copy" ref={copyRef}><div className="eyebrow">FOOTBALL · STRATEGY · FRIENDS</div><h2 ref={titleRef}>BUILD <span>LEGENDS.</span><br />OUTBID EVERYONE.</h2><p>A live football auction game where every bid, reveal and squad decision matters.</p></div>
+        <div className="manager-hero-brand"><Brand /></div>
+        <div className="manager-mode-cards"><article><span>⚒</span><b>LIVE AUCTIONS</b><small>Real-time bidding pressure</small></article><article><span>?</span><b>BLIND AUCTIONS</b><small>Blur or random reveal</small></article><article><span>👥</span><b>MULTIPLAYER</b><small>Build against your rivals</small></article></div>
       </section>
     </section>
-    <footer className="landing-footer"><Brand /><span>Original football auction game · In-game credits have no monetary value.</span></footer>
+    <section className="premium-flow-strip" id="how"><div><span>01</span><b>CREATE</b><small>Choose identity and room rules.</small></div><i>→</i><div><span>02</span><b>COMPETE</b><small>Bid, guess and react live.</small></div><i>→</i><div><span>03</span><b>BUILD</b><small>Shape your final eleven.</small></div><i>→</i><div><span>04</span><b>WIN</b><small>Finish on top of the room.</small></div></section>
+    <footer className="landing-footer premium-footer"><Brand /><span>Original football auction game · In-game credits have no monetary value.</span></footer>
     <AnimatePresence>{directoryOpen && <RoomDirectory socket={socket} managerName={name} managerAvatar={avatar} saveSeat={saveSeat} setError={setError} onClose={closeDirectory} />}</AnimatePresence>
   </main>;
 }
@@ -1224,7 +1263,7 @@ function BlindRevealImage({ blind, revealStyle = "blur" }: { blind: BlindPublicS
 
   useEffect(() => {
     const update = () => setClientNow(Date.now());
-    const timer = window.setInterval(update, 200);
+    const timer = window.setInterval(update, 120);
     const handleVisibility = () => { if (!document.hidden) update(); };
     document.addEventListener("visibilitychange", handleVisibility);
     window.addEventListener("focus", update);
@@ -1239,8 +1278,8 @@ function BlindRevealImage({ blind, revealStyle = "blur" }: { blind: BlindPublicS
   const clarity = blind.status === "guessing" && blind.endsAt !== null
     ? getBlindWipeProgress({ now: estimatedServerNow, startedAt: blind.startedAt, endsAt: blind.endsAt })
     : 1;
-  const MAX_BLUR_PX = 26;
-  const MIN_BLUR_PX = 0.6;
+  const MAX_BLUR_PX = 30;
+  const MIN_BLUR_PX = 0.7;
   const blurPx = blind.status === "guessing"
     ? Math.max(MIN_BLUR_PX, MAX_BLUR_PX * (1 - clarity))
     : 0;
@@ -1248,7 +1287,7 @@ function BlindRevealImage({ blind, revealStyle = "blur" }: { blind: BlindPublicS
   const targetPath = `${baseUrl}/5.webp`;
   const imageUrl = `${apiUrl(targetPath)}${retry ? `?retry=${retry}` : ""}`;
   const effectiveRevealStyle = revealStyle ?? "blur";
-  const wipeVisibility = blind.status === "guessing" ? Math.min(1, 0.08 + clarity * 0.92) : 1;
+  const wipeVisibility = blind.status === "guessing" ? Math.min(1, 0.07 + clarity * 0.93) : 1;
   const wipeClipPath = getBlindDirectionalClipPath(blind.revealDirection, wipeVisibility);
   const revealLabel = `REVEAL · ${blind.revealDirection.replace(/-/g, " → ").toUpperCase()}`;
 
@@ -1262,15 +1301,24 @@ function BlindRevealImage({ blind, revealStyle = "blur" }: { blind: BlindPublicS
     else setFailed(true);
   };
 
-  return <>
+  return <div className="blind-player-visual">
     <div className={`blind-reveal-frame ${effectiveRevealStyle === "wipe" ? "wipe-reveal" : "blur-reveal"}`} data-blind-round={blind.blindRoundId} data-reveal-direction={blind.revealDirection}>
       {failed
         ? <div className="blind-image-fallback" role="img" aria-label="Mystery footballer image unavailable"><span>?</span><b>MYSTERY PLAYER</b><small>Image unavailable · guessing still works</small></div>
-        : <img key={`${blind.blindRoundId}:${retry}`} src={imageUrl} alt={blind.status === "guessing" ? "Obscured mystery footballer" : blind.revealedFootballer?.name ?? "Revealed footballer"} draggable={false} onError={handleImageError} style={effectiveRevealStyle === "wipe" ? { clipPath: wipeClipPath, WebkitClipPath: wipeClipPath } : { filter: `blur(${blurPx}px)`, WebkitFilter: `blur(${blurPx}px)` }} />}
+        : <>
+          <img className="blind-image-backdrop" key={`backdrop:${blind.blindRoundId}:${retry}`} src={imageUrl} alt="" aria-hidden="true" draggable={false} onError={handleImageError} />
+          <div className="blind-image-vignette" aria-hidden="true" />
+          <div className="blind-image-layer" style={effectiveRevealStyle === "wipe" ? { clipPath: wipeClipPath, WebkitClipPath: wipeClipPath } : undefined}>
+            <img className="blind-image-main" key={`${blind.blindRoundId}:${retry}`} src={imageUrl} alt={blind.status === "guessing" ? "Obscured mystery footballer" : blind.revealedFootballer?.name ?? "Revealed footballer"} draggable={false} onError={handleImageError} style={effectiveRevealStyle === "blur" ? { filter: `blur(${blurPx}px)`, WebkitFilter: `blur(${blurPx}px)` } : undefined} />
+          </div>
+          {effectiveRevealStyle === "wipe" && <div className={`blind-wipe-edge edge-${blind.revealDirection}`} style={{ "--wipe-progress": `${wipeVisibility * 100}%` } as React.CSSProperties} aria-hidden="true" />}
+          <div className="blind-image-caption"><span>{effectiveRevealStyle === "wipe" ? revealLabel : "BLUR REVEAL"}</span><b>{Math.round(clarity * 100)}%</b></div>
+        </>}
     </div>
-    <div className="blind-stage-meta"><span>{effectiveRevealStyle === "wipe" ? revealLabel : "CLARITY"}</span><b>{Math.round(clarity * 100)}%</b></div>
-  </>;
+    <div className="blind-reveal-progress" aria-hidden="true"><i style={{ width: `${Math.max(4, Math.round(clarity * 100))}%` }} /></div>
+  </div>;
 }
+
 function BlindArena({ socket, state, managerId, setError, onDone }: { socket: GameSocket; state: RoomState; managerId: string; setError: (value: string) => void; onDone: () => void }) {
   const blind = state.blindRound!;
   const me = state.managers.find(manager => manager.id === managerId)!;
@@ -1302,19 +1350,33 @@ function BlindArena({ socket, state, managerId, setError, onDone }: { socket: Ga
   };
   const canComplete = completion.canDeclareDone && !me.auctionComplete;
   const revealed = blind.revealedFootballer;
-  return <main className="arena page blind-arena">
-    <div className="arena-top blind-top"><div><span>ROOM {state.code}</span><b>BLIND ROUND {state.roundIndex + 1}/{state.totalRounds}</b></div><div className="auction-top-actions"><AuctionTimer endsAt={blind.endsAt} durationSeconds={state.settings.blindRevealSeconds} /><button type="button" className="squad-quick-button" onClick={() => setSquadOpen(true)}>👥 <b>{completion.completedStarters}/{completion.requiredStarters}</b></button></div><div className="live"><i /> {blind.status === "guessing" ? "GUESS THE PLAYER" : "FULL REVEAL"}</div></div>
-    <section className="blind-stage-card">
-      <BlindRevealImage blind={blind} revealStyle={state.settings.blindRevealStyle ?? "blur"} />
-      {blind.clues.length > 0 && <div className="blind-clues">{blind.clues.map(clue => <span key={clue.label}><small>{clue.label}</small><b>{clue.value}</b></span>)}</div>}
-      {revealed && blind.status !== "guessing" && <div className="blind-revealed-name"><span>IT WAS</span><strong>{revealed.name}</strong><small>{getFootballerPrimaryRoles(revealed).join(" / ")} · {revealed.playerType === "ICON" ? "ICON" : "CURRENT"}</small></div>}
+  const revealStyle = state.settings.blindRevealStyle ?? "blur";
+  return <main className="arena page blind-arena premium-blind-arena">
+    <div className="arena-top blind-top premium-game-top"><div><span>ROOM {state.code}</span><b>BLIND ROUND {state.roundIndex + 1}/{state.totalRounds}</b></div><div className="auction-top-actions"><AuctionTimer endsAt={blind.endsAt} durationSeconds={state.settings.blindRevealSeconds} /><button type="button" className="squad-quick-button" onClick={() => setSquadOpen(true)}>👥 <b>{completion.completedStarters}/{completion.requiredStarters}</b></button></div><div className="live"><i /> {blind.status === "guessing" ? "BLIND AUCTION" : "FULL REVEAL"}</div></div>
+    <section className="blind-game-shell">
+      <div className="blind-player-column"><BlindRevealImage blind={blind} revealStyle={revealStyle} /></div>
+      <section className="blind-quiz-panel">
+        <div className="blind-quiz-kicker"><i /> BLIND AUCTION <span>PLAYER {state.roundIndex + 1} OF {state.totalRounds}</span></div>
+        <h1>WHO IS THIS PLAYER?</h1>
+        <p className="blind-quiz-copy">Watch the reveal, use the clues, and lock in your guess before anyone else.</p>
+        <div className="blind-clues premium-blind-clues">{blind.clues.length > 0 ? blind.clues.map(clue => <span key={clue.label}><small>{clue.label}</small><b>{clue.value}</b></span>) : <span className="locked-clue"><small>CLUES</small><b>REVEALING SOON</b></span>}</div>
+        {revealed && blind.status !== "guessing" && <div className="blind-revealed-name"><span>IT WAS</span><strong>{revealed.name}</strong><small>{getFootballerPrimaryRoles(revealed).join(" / ")} · {revealed.playerType === "ICON" ? "ICON" : "CURRENT"}</small></div>}
+        <form className={`blind-guess-panel ${feedback && !feedback.startsWith("Correct") ? "wrong-feedback" : feedback.startsWith("Correct") ? "correct-feedback" : ""}`} onSubmit={submitGuess}>
+          <label><span>WHO IS THIS PLAYER?</span><div className="blind-input-row"><input value={guess} onChange={event => setGuess(event.target.value)} disabled={blind.status !== "guessing" || sending || me.auctionComplete || completion.squadFull} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} enterKeyHint="go" maxLength={80} placeholder={me.auctionComplete ? "You are DONE" : "Type player name…"} /><button className="primary" type="submit" disabled={blind.status !== "guessing" || sending || !guess.trim() || me.auctionComplete || completion.squadFull}>{sending ? "CHECKING…" : "GUESS"}</button></div></label>
+          <small className={`blind-feedback ${feedback.startsWith("Correct") ? "correct" : ""}`}>{feedback || (me.auctionComplete ? "You can watch the remaining mystery rounds." : "Aliases, accents and small safe typos are handled by the server.")}</small>
+        </form>
+        <div className="blind-mode-card"><span>REVEAL STYLE</span><b>{revealStyle === "wipe" ? "RANDOM DIRECTION WIPE" : "PROGRESSIVE BLUR"}</b><small>{revealStyle === "wipe" ? "A new direction is randomized for every player." : "The real image sharpens continuously as the timer falls."}</small></div>
+        {canComplete && <button type="button" className="complete-auction blind-done-button" onClick={onDone}>I'M DONE WITH MY SQUAD</button>}
+      </section>
+      <aside className="blind-rivals-panel">
+        <header><div><span>ROOM RIVALS</span><b>{state.managers.length} MANAGERS</b></div><small>FIRST CORRECT WINS</small></header>
+        <div className="blind-rival-list">{state.managers.map((manager, index) => {
+          const managerCompletion = getSquadCompletion(manager.squad, state.settings);
+          return <div className={`blind-rival ${manager.id === managerId ? "you" : ""} ${manager.auctionComplete ? "done" : ""}`} key={manager.id}><span className="blind-rival-rank">{index + 1}</span><ManagerBadge avatar={manager.avatar} label={manager.name} size="sm" /><div><b>{manager.name}</b><small>{manager.id === managerId ? "YOU" : manager.isBot ? "AI MANAGER" : manager.connected ? "ONLINE" : "RECONNECTING"} · {managerCompletion.completedStarters}/{completion.requiredStarters}</small></div><i /></div>;
+        })}</div>
+        <div className="blind-your-status"><ManagerBadge avatar={me.avatar} label={me.name} size="md" /><div><span>YOUR STATUS</span><b>{completion.completedStarters}/{completion.requiredStarters} STARTERS</b><small>{completion.currentSubstitutes}/{completion.maxSubstitutes} substitutes · {me.auctionComplete ? "DONE" : "still playing"}</small></div></div>
+      </aside>
     </section>
-    <form className={`blind-guess-dock ${feedback && !feedback.startsWith("Correct") ? "wrong-feedback" : feedback.startsWith("Correct") ? "correct-feedback" : ""}`} onSubmit={submitGuess}>
-      <label><span>WHO IS THIS PLAYER?</span><input value={guess} onChange={event => setGuess(event.target.value)} disabled={blind.status !== "guessing" || sending || me.auctionComplete || completion.squadFull} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} enterKeyHint="go" maxLength={80} placeholder={me.auctionComplete ? "You are DONE" : "Type a player name…"} /></label>
-      <button className="primary" type="submit" disabled={blind.status !== "guessing" || sending || !guess.trim() || me.auctionComplete || completion.squadFull}>{sending ? "CHECKING…" : "GUESS"}</button>
-      {canComplete && <button type="button" className="complete-auction" onClick={onDone}>I'M DONE</button>}
-      <small className={`blind-feedback ${feedback.startsWith("Correct") ? "correct" : ""}`}>{feedback || (me.auctionComplete ? "You can watch the remaining mystery rounds." : "Aliases, accents and small safe typos are handled by the server.")}</small>
-    </form>
     {squadOpen && <MiniSquadModal state={state} managerId={managerId} canComplete={canComplete} completion={completion} onDone={onDone} onClose={() => setSquadOpen(false)} />}
   </main>;
 }

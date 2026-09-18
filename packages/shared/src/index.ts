@@ -15,6 +15,7 @@ export type GameMode = "normal" | "blind";
 export type BlindDifficulty = "easy" | "normal" | "hard";
 export type BlindClueLevel = "off" | "light" | "normal" | "more";
 export type BlindRevealDirection = "top-down" | "bottom-up" | "left-right" | "right-left";
+export type BlindRevealStyle = "blur" | "wipe";
 export type BlindNoGuessMode = "quick_auction" | "skip";
 export type BlindGuessResultCode = "correct" | "incorrect" | "ambiguous" | "rate_limited" | "round_finished";
 export const MAX_SUBSTITUTES = 10;
@@ -357,6 +358,7 @@ export interface GameSettings {
   gameMode: GameMode;
   blindRevealSeconds: 10 | 15 | 20 | 30 | 45;
   blindDifficulty: BlindDifficulty;
+  blindRevealStyle?: BlindRevealStyle;
   blindClues: BlindClueLevel;
   blindNoGuess: BlindNoGuessMode;
   startingBudget: number;

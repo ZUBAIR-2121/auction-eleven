@@ -3080,3 +3080,12 @@ button:not(:disabled):active { transform: scale(.97); }
 /* Draggable chat bubble */
 .chat-launcher { cursor: grab; }
 .chat-launcher:active { cursor: grabbing; }
+
+/* Blind Auction reveal frame improvements */
+.blind-reveal-frame{display:flex;align-items:center;justify-content:center;padding:12px;background:radial-gradient(circle at 50% 18%,rgba(140,255,84,.08),transparent 35%),linear-gradient(180deg,#07100b 0%,#0a1710 100%)}
+.blind-reveal-frame img{width:100%;height:100%;object-fit:contain;object-position:center center;display:block;user-select:none;-webkit-user-drag:none;-webkit-touch-callout:none}
+.blind-reveal-frame.blur-reveal img{transform:scale(1);transition:filter .18s linear,-webkit-filter .18s linear}
+.blind-reveal-frame.wipe-reveal{padding:12px;position:relative}
+.blind-reveal-frame.wipe-reveal::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;box-shadow:inset 0 0 0 1px rgba(140,255,84,.06)}
+.blind-reveal-frame.wipe-reveal img{transition:clip-path .18s linear,-webkit-clip-path .18s linear}
+@media(max-width:720px){.blind-reveal-frame{padding:8px}}

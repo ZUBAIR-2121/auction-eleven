@@ -24,6 +24,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   gameMode: "normal",
   blindRevealSeconds: 20,
   blindDifficulty: "normal",
+  blindRevealStyle: "blur",
   blindClues: "normal",
   blindNoGuess: "quick_auction",
   startingBudget: 1000,

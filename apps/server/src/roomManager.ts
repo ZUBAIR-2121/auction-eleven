@@ -105,6 +105,7 @@ const settingsSchema = z.object({
   gameMode: z.enum(["normal", "blind"]).optional(),
   blindRevealSeconds: z.union([z.literal(10), z.literal(15), z.literal(20), z.literal(30), z.literal(45)]).optional(),
   blindDifficulty: z.enum(["easy", "normal", "hard"]).optional(),
+  blindRevealStyle: z.enum(["blur", "wipe"]).optional(),
   blindClues: z.enum(["off", "light", "normal", "more"]).optional(),
   blindNoGuess: z.enum(["quick_auction", "skip"]).optional(),
   startingBudget: z.number().int().min(300).max(3000).optional(),

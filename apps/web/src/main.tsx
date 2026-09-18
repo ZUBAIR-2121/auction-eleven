@@ -872,6 +872,7 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
   const changeGameMode = (gameMode: GameMode) => updateSettings({ gameMode });
   const changeBlindTimer = (blindRevealSeconds: 10 | 15 | 20 | 30 | 45) => updateSettings({ blindRevealSeconds });
   const changeBlindDifficulty = (blindDifficulty: BlindDifficulty) => updateSettings({ blindDifficulty });
+  const changeBlindRevealStyle = (blindRevealStyle: "blur" | "wipe") => updateSettings({ blindRevealStyle });
   const changeBlindClues = (blindClues: BlindClueLevel) => updateSettings({ blindClues });
   const changeBlindNoGuess = (blindNoGuess: BlindNoGuessMode) => updateSettings({ blindNoGuess });
   const autoBuildPool = () => socket.emit("room:autoBuildPlayerPool", { code: state.code }, response => { if (!response.ok) setError(response.error); });
@@ -900,7 +901,7 @@ function Lobby({ socket, state, managerId, setError, leave }: { socket: GameSock
         <Setting label="Auction timer" value={`${state.settings.auctionSeconds}s`}><input disabled={!isHost} type="range" min="10" max="30" step="1" value={state.settings.auctionSeconds} onChange={event => changeNumber("auctionSeconds", +event.target.value)} /></Setting>
         <Setting label="Formation time limit" value={`${Math.round(state.settings.formationSeconds / 60)} min`}><input disabled={!isHost} type="range" min="120" max="600" step="60" value={state.settings.formationSeconds} onChange={event => changeNumber("formationSeconds", +event.target.value)} /></Setting>
         {!state.isSolo && <div className="manager-limit-setting room-access-setting"><div><span>ROOM ACCESS</span><b>{state.access === "password" ? "PASSWORD" : "OPEN"}</b></div><div className="preset-buttons pricing-mode-buttons"><button disabled={!isHost} className={state.access === "public" ? "active" : ""} onClick={() => changeRoomAccess("public")}><strong>Open room</strong><small>Visible in Find Room and joins instantly.</small></button><button disabled={!isHost} className={state.access === "password" ? "active" : ""} onClick={() => changeRoomAccess("password")}><strong>Password room</strong><small>Visible in Find Room but locked.</small></button></div>{isHost && <div className="lobby-password-row"><input type="password" maxLength={32} value={roomPassword} onChange={event => setRoomPassword(event.target.value)} placeholder={state.hasPassword ? "Enter a new password to replace it" : "Set password (4–32 characters)"} /><button disabled={roomPassword.trim().length < 4} onClick={() => changeRoomAccess("password")}>{state.hasPassword ? "UPDATE PASSWORD" : "SET PASSWORD"}</button></div>}<small>{state.hasPassword ? "A password is active. It is never sent to other players or shown in the room directory." : "Open rooms can be joined without a password."}</small></div>}
-        <div className="manager-limit-setting game-mode-setting"><div><span>GAME MODE</span><b>{state.settings.gameMode === "blind" ? "BLIND AUCTION" : "NORMAL AUCTION"}</b></div><div className="preset-buttons game-mode-buttons"><button disabled={!isHost} className={state.settings.gameMode === "normal" ? "active" : ""} onClick={() => changeGameMode("normal")}><strong>Normal Auction</strong><small>Classic budget bidding.</small></button><button disabled={!isHost} className={state.settings.gameMode === "blind" ? "active blind" : "blind"} onClick={() => changeGameMode("blind")}><strong>Blind Auction</strong><small>First correct player guess wins.</small></button></div>{state.settings.gameMode === "blind" && <div className="blind-room-options"><div><span>REVEAL TIMER</span><div className="inline-choice">{([10,15,20,30,45] as const).map(value => <button disabled={!isHost} className={state.settings.blindRevealSeconds === value ? "active" : ""} onClick={() => changeBlindTimer(value)} key={value}>{value}s</button>)}</div></div><div><span>DIFFICULTY</span><div className="inline-choice">{(["easy","normal","hard"] as BlindDifficulty[]).map(value => <button disabled={!isHost} className={state.settings.blindDifficulty === value ? "active" : ""} onClick={() => changeBlindDifficulty(value)} key={value}>{value.toUpperCase()}</button>)}</div></div><div><span>CLUES</span><div className="inline-choice">{(["off","light","normal","more"] as BlindClueLevel[]).map(value => <button disabled={!isHost} className={state.settings.blindClues === value ? "active" : ""} onClick={() => changeBlindClues(value)} key={value}>{value.toUpperCase()}</button>)}</div></div><div><span>IF NOBODY GUESSES</span><div className="inline-choice"><button disabled={!isHost} className={state.settings.blindNoGuess === "quick_auction" ? "active" : ""} onClick={() => changeBlindNoGuess("quick_auction")}>QUICK AUCTION</button><button disabled={!isHost} className={state.settings.blindNoGuess === "skip" ? "active" : ""} onClick={() => changeBlindNoGuess("skip")}>SKIP</button></div></div><small>Answers are checked by the server. Hidden names and clear image URLs are not sent before reveal.</small></div>}</div>
+        <div className="manager-limit-setting game-mode-setting"><div><span>GAME MODE</span><b>{state.settings.gameMode === "blind" ? "BLIND AUCTION" : "NORMAL AUCTION"}</b></div><div className="preset-buttons game-mode-buttons"><button disabled={!isHost} className={state.settings.gameMode === "normal" ? "active" : ""} onClick={() => changeGameMode("normal")}><strong>Normal Auction</strong><small>Classic budget bidding.</small></button><button disabled={!isHost} className={state.settings.gameMode === "blind" ? "active blind" : "blind"} onClick={() => changeGameMode("blind")}><strong>Blind Auction</strong><small>First correct player guess wins.</small></button></div>{state.settings.gameMode === "blind" && <div className="blind-room-options"><div><span>REVEAL TIMER</span><div className="inline-choice">{([10,15,20,30,45] as const).map(value => <button disabled={!isHost} className={state.settings.blindRevealSeconds === value ? "active" : ""} onClick={() => changeBlindTimer(value)} key={value}>{value}s</button>)}</div></div><div><span>DIFFICULTY</span><div className="inline-choice">{(["easy","normal","hard"] as BlindDifficulty[]).map(value => <button disabled={!isHost} className={state.settings.blindDifficulty === value ? "active" : ""} onClick={() => changeBlindDifficulty(value)} key={value}>{value.toUpperCase()}</button>)}</div></div><div><span>REVEAL STYLE</span><div className="inline-choice"><button disabled={!isHost} className={(state.settings.blindRevealStyle ?? "blur") === "blur" ? "active" : ""} onClick={() => changeBlindRevealStyle("blur")}>BLUR</button><button disabled={!isHost} className={(state.settings.blindRevealStyle ?? "blur") === "wipe" ? "active" : ""} onClick={() => changeBlindRevealStyle("wipe")}>RANDOM WIPE</button></div></div><div><span>CLUES</span><div className="inline-choice">{(["off","light","normal","more"] as BlindClueLevel[]).map(value => <button disabled={!isHost} className={state.settings.blindClues === value ? "active" : ""} onClick={() => changeBlindClues(value)} key={value}>{value.toUpperCase()}</button>)}</div></div><div><span>IF NOBODY GUESSES</span><div className="inline-choice"><button disabled={!isHost} className={state.settings.blindNoGuess === "quick_auction" ? "active" : ""} onClick={() => changeBlindNoGuess("quick_auction")}>QUICK AUCTION</button><button disabled={!isHost} className={state.settings.blindNoGuess === "skip" ? "active" : ""} onClick={() => changeBlindNoGuess("skip")}>SKIP</button></div></div><small>Blur = image stays visible but blurry. Random wipe = every round reveals the same player image from a new random direction.</small></div>}</div>
 
         <div className="manager-limit-setting pricing-mode-setting"><div><span>PLAYER STARTING PRICES</span><b>{state.settings.pricingMode === "ovr_scaled" ? "OVR PRICING" : "NORMAL"}</b></div><div className="preset-buttons pricing-mode-buttons">{PRICING_MODES.map(mode => <button disabled={!isHost} className={state.settings.pricingMode === mode.id ? "active" : ""} onClick={() => changePricingMode(mode.id)} key={mode.id}><strong>{mode.title}</strong><small>{mode.description}</small></button>)}</div><small>{state.settings.pricingMode === "ovr_scaled" ? "The opening bid uses each player's OVR and market value, scaled to the room budget." : "Classic mode keeps the same opening bid for every footballer."}</small></div>
 
@@ -1123,7 +1124,23 @@ function MiniSquadModal({ state, managerId, canComplete, completion, onDone, onC
 
 type BlindPublicState = NonNullable<RoomState["blindRound"]>;
 
-function BlindRevealImage({ blind }: { blind: BlindPublicState }) {
+function getBlindDirectionalClipPath(direction: BlindPublicState["revealDirection"], progress: number): string {
+  const clamped = Math.max(0, Math.min(1, progress));
+  const hiddenPercent = (1 - clamped) * 100;
+  switch (direction) {
+    case "bottom-up":
+      return `inset(${hiddenPercent}% 0 0 0 round 22px)`;
+    case "left-right":
+      return `inset(0 ${hiddenPercent}% 0 0 round 22px)`;
+    case "right-left":
+      return `inset(0 0 0 ${hiddenPercent}% round 22px)`;
+    case "top-down":
+    default:
+      return `inset(0 0 ${hiddenPercent}% 0 round 22px)`;
+  }
+}
+
+function BlindRevealImage({ blind, revealStyle = "blur" }: { blind: BlindPublicState; revealStyle?: "blur" | "wipe" }) {
   const [clientNow, setClientNow] = useState(() => Date.now());
   const anchorRef = useRef({ serverNow: blind.serverNow ?? Date.now(), clientNow: Date.now() });
   const [retry, setRetry] = useState(0);
@@ -1148,23 +1165,21 @@ function BlindRevealImage({ blind }: { blind: BlindPublicState }) {
   }, []);
 
   const estimatedServerNow = anchorRef.current.serverNow + (clientNow - anchorRef.current.clientNow);
-  // One fixed image for the whole round (the 720px reveal asset). The
-  // reveal itself is a pure CSS blur that continuously eases from heavy to
-  // clear as the timer runs down, instead of swapping between separate
-  // resolution files. Same authoritative timestamps as before, so it stays
-  // in sync across everyone in the room and recovers correctly after a
-  // reconnect or a missed broadcast.
   const clarity = blind.status === "guessing" && blind.endsAt !== null
     ? getBlindWipeProgress({ now: estimatedServerNow, startedAt: blind.startedAt, endsAt: blind.endsAt })
     : 1;
   const MAX_BLUR_PX = 26;
-  const MIN_BLUR_PX = 0.6; // never perfectly sharp until the round actually ends
+  const MIN_BLUR_PX = 0.6;
   const blurPx = blind.status === "guessing"
     ? Math.max(MIN_BLUR_PX, MAX_BLUR_PX * (1 - clarity))
     : 0;
   const baseUrl = blind.revealAssetBaseUrl || blind.revealImageUrl.replace(/\/\d+\.webp(?:\?.*)?$/, "");
   const targetPath = `${baseUrl}/5.webp`;
   const imageUrl = `${apiUrl(targetPath)}${retry ? `?retry=${retry}` : ""}`;
+  const effectiveRevealStyle = revealStyle ?? "blur";
+  const wipeVisibility = blind.status === "guessing" ? Math.min(1, 0.08 + clarity * 0.92) : 1;
+  const wipeClipPath = getBlindDirectionalClipPath(blind.revealDirection, wipeVisibility);
+  const revealLabel = `REVEAL · ${blind.revealDirection.replace(/-/g, " → ").toUpperCase()}`;
 
   useEffect(() => {
     setRetry(0);
@@ -1177,15 +1192,14 @@ function BlindRevealImage({ blind }: { blind: BlindPublicState }) {
   };
 
   return <>
-    <div className="blind-reveal-frame blur-reveal" data-blind-round={blind.blindRoundId}>
+    <div className={`blind-reveal-frame ${effectiveRevealStyle === "wipe" ? "wipe-reveal" : "blur-reveal"}`} data-blind-round={blind.blindRoundId} data-reveal-direction={blind.revealDirection}>
       {failed
         ? <div className="blind-image-fallback" role="img" aria-label="Mystery footballer image unavailable"><span>?</span><b>MYSTERY PLAYER</b><small>Image unavailable · guessing still works</small></div>
-        : <img key={`${blind.blindRoundId}:${retry}`} src={imageUrl} alt={blind.status === "guessing" ? "Obscured mystery footballer" : blind.revealedFootballer?.name ?? "Revealed footballer"} draggable={false} onError={handleImageError} style={{ filter: `blur(${blurPx}px)`, WebkitFilter: `blur(${blurPx}px)` }} />}
+        : <img key={`${blind.blindRoundId}:${retry}`} src={imageUrl} alt={blind.status === "guessing" ? "Obscured mystery footballer" : blind.revealedFootballer?.name ?? "Revealed footballer"} draggable={false} onError={handleImageError} style={effectiveRevealStyle === "wipe" ? { clipPath: wipeClipPath, WebkitClipPath: wipeClipPath } : { filter: `blur(${blurPx}px)`, WebkitFilter: `blur(${blurPx}px)` }} />}
     </div>
-    <div className="blind-stage-meta"><span>CLARITY</span><b>{Math.round(clarity * 100)}%</b></div>
+    <div className="blind-stage-meta"><span>{effectiveRevealStyle === "wipe" ? revealLabel : "CLARITY"}</span><b>{Math.round(clarity * 100)}%</b></div>
   </>;
 }
-
 function BlindArena({ socket, state, managerId, setError, onDone }: { socket: GameSocket; state: RoomState; managerId: string; setError: (value: string) => void; onDone: () => void }) {
   const blind = state.blindRound!;
   const me = state.managers.find(manager => manager.id === managerId)!;
@@ -1218,7 +1232,7 @@ function BlindArena({ socket, state, managerId, setError, onDone }: { socket: Ga
   return <main className="arena page blind-arena">
     <div className="arena-top blind-top"><div><span>ROOM {state.code}</span><b>BLIND ROUND {state.roundIndex + 1}/{state.totalRounds}</b></div><div className="auction-top-actions"><AuctionTimer endsAt={blind.endsAt} durationSeconds={state.settings.blindRevealSeconds} /><button type="button" className="squad-quick-button" onClick={() => setSquadOpen(true)}>👥 <b>{completion.completedStarters}/{completion.requiredStarters}</b></button></div><div className="live"><i /> {blind.status === "guessing" ? "GUESS THE PLAYER" : "FULL REVEAL"}</div></div>
     <section className="blind-stage-card">
-      <BlindRevealImage blind={blind} />
+      <BlindRevealImage blind={blind} revealStyle={state.settings.blindRevealStyle ?? "blur"} />
       {blind.clues.length > 0 && <div className="blind-clues">{blind.clues.map(clue => <span key={clue.label}><small>{clue.label}</small><b>{clue.value}</b></span>)}</div>}
       {revealed && blind.status !== "guessing" && <div className="blind-revealed-name"><span>IT WAS</span><strong>{revealed.name}</strong><small>{getFootballerPrimaryRoles(revealed).join(" / ")} · {revealed.playerType === "ICON" ? "ICON" : "CURRENT"}</small></div>}
     </section>

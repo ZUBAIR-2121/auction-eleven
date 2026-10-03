@@ -204,15 +204,99 @@ export function validateAndBuildLineup(squad: SquadEntry[], formationId: string,
 
 function playersForRoles(manager: BudgetedManager, roles: LineupRole[]): Footballer[] {
   const playerMap = new Map(manager.squad.map(entry => [entry.footballer.id, entry.footballer]));
-  return manager.lineup.filter(item => roles.includes(item.role)).map(item => playerMap.get(item.footballerId)).filter((player): player is Footballer => !!player);
+  return manager.lineup
+    .filter(item => roles.includes(item.role))
+    .map(item => playerMap.get(item.footballerId))
+    .filter((player): player is Footballer => !!player);
 }
 
-function attackScore(player: Footballer): number { return player.shooting * .38 + player.pace * .25 + player.dribbling * .22 + player.passing * .10 + player.physical * .05; }
-function midfieldScore(player: Footballer): number { return player.passing * .34 + player.dribbling * .23 + player.physical * .16 + player.defending * .14 + player.shooting * .13; }
-function defenceScore(player: Footballer): number { return player.defending * .44 + player.physical * .25 + player.pace * .16 + player.passing * .15; }
+const roundMetric = (value: number, digits = 1): number => {
+  if (!Number.isFinite(value)) return 0;
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+};
 
-export function calculateRanking(manager: BudgetedManager): Omit<Ranking, "rank"> {
-  const formation = FORMATION_BY_ID.get(manager.formationId ?? "") ?? FORMATIONS[0]!;
+const clampMetric = (value: number, min = 0, max = 100, digits = 1): number =>
+  roundMetric(Math.max(min, Math.min(max, value)), digits);
+
+function attackScore(player: Footballer): number {
+  return player.shooting * .38 + player.pace * .25 + player.dribbling * .22 + player.passing * .10 + player.physical * .05;
+}
+
+function midfieldScore(player: Footballer): number {
+  return player.passing * .34 + player.dribbling * .23 + player.physical * .16 + player.defending * .14 + player.shooting * .13;
+}
+
+function defenceScore(player: Footballer): number {
+  return player.defending * .44 + player.physical * .25 + player.pace * .16 + player.passing * .15;
+}
+
+function averageOrZero(players: Footballer[], score: (player: Footballer) => number): number {
+  return players.length ? average(players.map(score)) : 0;
+}
+
+/**
+ * Team balance is deliberately a "no weak link" score rather than another
+ * copy of overall rating. A strong average still matters, but a weak unit
+ * (for example no real goalkeeper) meaningfully drags the team down.
+ */
+function calculateTeamBalance(attack: number, midfield: number, defence: number, goalkeeping: number): number {
+  const units = [attack, midfield, defence, goalkeeping];
+  const unitAverage = average(units);
+  const weakest = Math.min(...units);
+  const spread = Math.max(...units) - weakest;
+  const consistency = Math.max(0, 100 - spread);
+  return clampMetric(unitAverage * .45 + weakest * .40 + consistency * .15);
+}
+
+function purchaseEfficiency(entry: SquadEntry): number {
+  const reference = Math.max(1, entry.footballer.basePrice);
+  const savingRatio = (reference - entry.price) / reference;
+  // 50 = paid the reference price, >50 = bargain, <50 = overpay.
+  return clampMetric(50 + savingRatio * 50);
+}
+
+function rankingTiebreakReason(a: Omit<Ranking, "rank">, b: Omit<Ranking, "rank">): string {
+  const checks: Array<[number, number, string]> = [
+    [a.startingXIQuality, b.startingXIQuality, "Stronger Starting XI"],
+    [a.lineupFit, b.lineupFit, "Better formation fit"],
+    [a.balance, b.balance, "Better team balance"],
+    [a.benchStrength, b.benchStrength, "Stronger bench depth"],
+    [a.remainingBudget, b.remainingBudget, "More remaining budget"]
+  ];
+  for (const [left, right, label] of checks) {
+    if (Math.abs(left - right) > .0001) return left > right ? label : "";
+  }
+  return "Exact statistical tie — stable ordering used";
+}
+
+function rankingComparator(a: Omit<Ranking, "rank">, b: Omit<Ranking, "rank">): number {
+  return b.score - a.score ||
+    b.startingXIQuality - a.startingXIQuality ||
+    b.lineupFit - a.lineupFit ||
+    b.balance - a.balance ||
+    b.benchStrength - a.benchStrength ||
+    b.remainingBudget - a.remainingBudget ||
+    a.managerId.localeCompare(b.managerId);
+}
+
+/**
+ * Result Engine V2 — Option A: the best football team wins.
+ *
+ * Winner score with substitutes enabled:
+ *   45% Starting XI quality
+ *   25% formation/position fit
+ *   20% balanced strength across ATT/MID/DEF/GK
+ *   10% bench depth
+ *
+ * With zero substitutes configured, the bench weight is redistributed to the
+ * Starting XI and formation fit (50/30/20). Auction price efficiency is kept
+ * as an awards/stat metric only and NEVER directly changes the winner score.
+ */
+export function calculateRanking(manager: BudgetedManager, settings: GameSettings = DEFAULT_SETTINGS): Omit<Ranking, "rank"> {
+  const starterTarget = getStartingLineupSize(settings.squadSize);
+  const formation = FORMATION_BY_ID.get(manager.formationId ?? "") ??
+    FORMATIONS.find(item => item.slots.length === starterTarget) ?? FORMATIONS[0]!;
   const lineupIds = new Set(manager.lineup.map(item => item.footballerId));
   const starters = manager.squad.filter(entry => lineupIds.has(entry.footballer.id));
   const bench = manager.squad.filter(entry => !lineupIds.has(entry.footballer.id));
@@ -220,23 +304,43 @@ export function calculateRanking(manager: BudgetedManager): Omit<Ranking, "rank"
   const midfielders = playersForRoles(manager, ["CDM", "CM", "CAM", "LM", "RM"]);
   const defenders = playersForRoles(manager, ["LB", "CB", "RB", "LWB", "RWB"]);
   const keepers = playersForRoles(manager, ["GK"]);
-  const attack = clamp(average((attackers.length ? attackers : starters.map(entry => entry.footballer)).map(attackScore)));
-  const midfield = clamp(average((midfielders.length ? midfielders : starters.map(entry => entry.footballer)).map(midfieldScore)));
-  const defence = clamp(average((defenders.length ? defenders : starters.map(entry => entry.footballer)).map(defenceScore)));
-  const goalkeeping = clamp(average((keepers.length ? keepers : starters.map(entry => entry.footballer)).map(player => player.goalkeeping)));
-  const lineupFit = clamp(average(manager.lineup.map(item => item.fit)));
-  const startingXIQuality = clamp(average(starters.map(entry => entry.footballer.overall)));
-  const benchStrength = clamp(bench.length ? average(bench.map(entry => entry.footballer.overall)) : average(starters.map(entry => entry.footballer.overall)));
-  const positionCoverage = new Set(manager.squad.map(entry => entry.footballer.position)).size / 4 * 100;
-  const balance = clamp(lineupFit * .72 + positionCoverage * .28);
-  const overspend = average(manager.squad.map(entry => Math.max(0, entry.price - entry.footballer.basePrice)));
-  const value = clamp(100 - overspend * 1.8);
-  const starterTarget = Math.min(11, manager.squad.length);
-  const completeness = manager.squad.length >= 6 ? Math.min(1, manager.lineup.length / starterTarget) : 0;
-  const score = clamp((
-    startingXIQuality * .32 + lineupFit * .20 + attack * .10 + midfield * .10 + defence * .10 +
-    goalkeeping * .07 + benchStrength * .06 + value * .03 + balance * .02
-  ) * completeness);
+
+  const attack = clampMetric(averageOrZero(attackers, attackScore));
+  const midfield = clampMetric(averageOrZero(midfielders, midfieldScore));
+  const defence = clampMetric(averageOrZero(defenders, defenceScore));
+  const goalkeeping = clampMetric(averageOrZero(keepers, player => player.goalkeeping));
+  const lineupFit = clampMetric(average(manager.lineup.map(item => item.fit)));
+  const startingXIQuality = clampMetric(average(starters.map(entry => entry.footballer.overall)));
+  const lineupCompleteness = clampMetric(starterTarget > 0 ? manager.lineup.length / starterTarget * 100 : 0);
+  const isComplete = manager.lineup.length === starterTarget;
+
+  const expectedBench = Math.max(0, Math.round(settings.substituteCount));
+  const actualBenchCount = Math.min(expectedBench, bench.length);
+  const benchCompleteness = expectedBench > 0 ? clampMetric(actualBenchCount / expectedBench * 100) : 100;
+  const rawBenchQuality = bench.length ? average(bench.map(entry => entry.footballer.overall)) : 0;
+  const benchStrength = expectedBench > 0
+    ? clampMetric(rawBenchQuality * (benchCompleteness / 100))
+    : 0;
+
+  const balance = calculateTeamBalance(attack, midfield, defence, goalkeeping);
+  const value = clampMetric(average(manager.squad.map(purchaseEfficiency)));
+
+  const hasBenchScoring = expectedBench > 0;
+  const startingXIWeight = hasBenchScoring ? .45 : .50;
+  const lineupFitWeight = hasBenchScoring ? .25 : .30;
+  const balanceWeight = .20;
+  const benchWeight = hasBenchScoring ? .10 : 0;
+  const completenessMultiplier = Math.max(0, Math.min(1, manager.lineup.length / starterTarget));
+
+  const startingXIContribution = startingXIQuality * startingXIWeight * completenessMultiplier;
+  const lineupFitContribution = lineupFit * lineupFitWeight * completenessMultiplier;
+  const balanceContribution = balance * balanceWeight * completenessMultiplier;
+  const benchContribution = benchStrength * benchWeight * completenessMultiplier;
+  const score = roundMetric(
+    startingXIContribution + lineupFitContribution + balanceContribution + benchContribution,
+    2
+  );
+
   return {
     managerId: manager.id,
     managerName: manager.name,
@@ -246,20 +350,39 @@ export function calculateRanking(manager: BudgetedManager): Omit<Ranking, "rank"
     lineupFit,
     startingXIQuality,
     benchStrength,
+    lineupCompleteness,
+    benchCompleteness,
+    isComplete,
     attack,
     midfield,
     defence,
     goalkeeping,
     balance,
     value,
-    remainingBudget: manager.budget
+    remainingBudget: manager.budget,
+    scoreBreakdown: {
+      startingXIWeight: Math.round(startingXIWeight * 100),
+      lineupFitWeight: Math.round(lineupFitWeight * 100),
+      balanceWeight: Math.round(balanceWeight * 100),
+      benchWeight: Math.round(benchWeight * 100),
+      startingXIContribution: roundMetric(startingXIContribution, 2),
+      lineupFitContribution: roundMetric(lineupFitContribution, 2),
+      balanceContribution: roundMetric(balanceContribution, 2),
+      benchContribution: roundMetric(benchContribution, 2),
+      completenessMultiplier: roundMetric(completenessMultiplier, 3)
+    },
+    tieBreakReason: null
   };
 }
 
-export function rankManagers(managers: BudgetedManager[]): Ranking[] {
-  return managers.map(calculateRanking)
-    .sort((a, b) => b.score - a.score || b.lineupFit - a.lineupFit || b.startingXIQuality - a.startingXIQuality || b.benchStrength - a.benchStrength || b.remainingBudget - a.remainingBudget)
-    .map((entry, index) => ({ ...entry, rank: index + 1 }));
+export function rankManagers(managers: BudgetedManager[], settings: GameSettings = DEFAULT_SETTINGS): Ranking[] {
+  const sorted = managers.map(manager => calculateRanking(manager, settings)).sort(rankingComparator);
+  return sorted.map((entry, index) => {
+    const next = sorted[index + 1];
+    const tiedOnDisplayedScore = !!next && Math.abs(entry.score - next.score) < .005;
+    const reason = tiedOnDisplayedScore ? rankingTiebreakReason(entry, next) : null;
+    return { ...entry, tieBreakReason: reason || null, rank: index + 1 };
+  });
 }
 
 export function getPurchaseValue(entry: SquadEntry): number {

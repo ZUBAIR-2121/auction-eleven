@@ -1902,21 +1902,46 @@ export class RoomManager {
     room.currentFootballer = null;
     room.endsAt = null;
     room.formationEndsAt = null;
-    room.rankings = rankManagers(room.managers);
+    room.rankings = rankManagers(room.managers, room.settings);
     const allPurchases = room.managers.flatMap(manager => manager.squad.map(entry => ({ manager, entry })));
     const awards: Award[] = [];
-    const bestFit = [...room.rankings].sort((a, b) => b.lineupFit - a.lineupFit)[0];
-    const bestAttack = [...room.rankings].sort((a, b) => b.attack - a.attack)[0];
-    const bestBench = [...room.rankings].sort((a, b) => b.benchStrength - a.benchStrength)[0];
-    const bestValue = [...room.rankings].sort((a, b) => b.value - a.value)[0];
-    const expensive = [...allPurchases].sort((a, b) => b.entry.price - a.entry.price)[0];
-    const bargain = [...allPurchases].sort((a, b) => getPurchaseValue(b.entry) - getPurchaseValue(a.entry))[0];
+    const bestBy = (metric: (ranking: (typeof room.rankings)[number]) => number) =>
+      [...room.rankings].sort((a, b) => metric(b) - metric(a) || a.rank - b.rank)[0];
+    const bestFit = bestBy(ranking => ranking.lineupFit);
+    const bestAttack = bestBy(ranking => ranking.attack);
+    const bestMidfield = bestBy(ranking => ranking.midfield);
+    const bestDefence = bestBy(ranking => ranking.defence);
+    const bestGoalkeeper = bestBy(ranking => ranking.goalkeeping);
+    const bestBalance = bestBy(ranking => ranking.balance);
+    const bestBench = bestBy(ranking => ranking.benchStrength);
+    const expensive = [...allPurchases].sort((a, b) => b.entry.price - a.entry.price || b.entry.footballer.overall - a.entry.footballer.overall)[0];
+    const bargain = [...allPurchases].sort((a, b) =>
+      (b.entry.footballer.basePrice - b.entry.price) - (a.entry.footballer.basePrice - a.entry.price) ||
+      b.entry.footballer.overall - a.entry.footballer.overall
+    )[0];
+    const overpay = [...allPurchases].sort((a, b) =>
+      (b.entry.price - b.entry.footballer.basePrice) - (a.entry.price - a.entry.footballer.basePrice) ||
+      b.entry.price - a.entry.price
+    )[0];
+    const mostBudget = [...room.rankings].sort((a, b) => b.remainingBudget - a.remainingBudget || a.rank - b.rank)[0];
+
     if (bestFit) awards.push({ title: "Best Formation Fit", managerName: bestFit.managerName, detail: `${bestFit.formationName} • Fit ${bestFit.lineupFit}` });
-    if (bestAttack) awards.push({ title: "Best Attack", managerName: bestAttack.managerName, detail: `Attack rating ${bestAttack.attack}` });
-    if (bestBench && room.managers.some(manager => manager.squad.length > getStartingLineupSize(room.settings.squadSize))) awards.push({ title: "Strongest Bench", managerName: bestBench.managerName, detail: `Bench strength ${bestBench.benchStrength}` });
-    if (bestValue) awards.push({ title: "Best Value", managerName: bestValue.managerName, detail: `Value rating ${bestValue.value}` });
+    if (bestAttack) awards.push({ title: "Best Attack", managerName: bestAttack.managerName, detail: `Attack ${bestAttack.attack}` });
+    if (bestMidfield) awards.push({ title: "Best Midfield", managerName: bestMidfield.managerName, detail: `Midfield ${bestMidfield.midfield}` });
+    if (bestDefence) awards.push({ title: "Best Defence", managerName: bestDefence.managerName, detail: `Defence ${bestDefence.defence}` });
+    if (bestGoalkeeper) awards.push({ title: "Best Goalkeeper", managerName: bestGoalkeeper.managerName, detail: `Goalkeeping ${bestGoalkeeper.goalkeeping}` });
+    if (bestBalance) awards.push({ title: "Best Team Balance", managerName: bestBalance.managerName, detail: `Balance ${bestBalance.balance}` });
+    if (room.settings.substituteCount > 0 && bestBench && room.managers.some(manager => manager.squad.length > getStartingLineupSize(room.settings.squadSize))) {
+      awards.push({ title: "Strongest Bench", managerName: bestBench.managerName, detail: `Depth ${bestBench.benchStrength} • ${bestBench.benchCompleteness}% filled` });
+    }
     if (expensive) awards.push({ title: "Record Signing", managerName: expensive.manager.name, detail: `${expensive.entry.footballer.name} for ${expensive.entry.price}M` });
-    if (bargain) awards.push({ title: "Biggest Bargain", managerName: bargain.manager.name, detail: `${bargain.entry.footballer.name} for ${bargain.entry.price}M` });
+    if (bargain && bargain.entry.footballer.basePrice > bargain.entry.price) {
+      awards.push({ title: "Biggest Bargain", managerName: bargain.manager.name, detail: `${bargain.entry.footballer.name} • saved ${bargain.entry.footballer.basePrice - bargain.entry.price}M vs reference` });
+    }
+    if (overpay && overpay.entry.price > overpay.entry.footballer.basePrice) {
+      awards.push({ title: "Biggest Overpay", managerName: overpay.manager.name, detail: `${overpay.entry.footballer.name} • paid ${overpay.entry.price - overpay.entry.footballer.basePrice}M over reference` });
+    }
+    if (mostBudget) awards.push({ title: "Most Budget Left", managerName: mostBudget.managerName, detail: `${mostBudget.remainingBudget}M remaining` });
     if (room.settings.playerPoolMode === "mixed" || room.settings.playerPoolMode === "custom") {
       const iconPurchases = allPurchases.filter(item => item.entry.footballer.playerType === "ICON");
       const currentPurchases = allPurchases.filter(item => (item.entry.footballer.playerType ?? "CURRENT") === "CURRENT");

@@ -451,22 +451,46 @@ export interface Award {
   detail: string;
 }
 
+export interface RankingScoreBreakdown {
+  startingXIWeight: number;
+  lineupFitWeight: number;
+  balanceWeight: number;
+  benchWeight: number;
+  startingXIContribution: number;
+  lineupFitContribution: number;
+  balanceContribution: number;
+  benchContribution: number;
+  completenessMultiplier: number;
+}
+
 export interface Ranking {
   managerId: string;
   managerName: string;
+  /** Final football-team score. Auction price/value does not directly affect this score. */
   score: number;
   formationId: string;
   formationName: string;
   lineupFit: number;
   startingXIQuality: number;
+  /** Depth score after accounting for how much of the configured bench was actually filled. */
   benchStrength: number;
+  /** Percentage of configured starting slots that are filled by the final lineup. */
+  lineupCompleteness: number;
+  /** Percentage of the configured optional bench capacity that is filled. */
+  benchCompleteness: number;
+  isComplete: boolean;
   attack: number;
   midfield: number;
   defence: number;
   goalkeeping: number;
+  /** No-weak-link team balance derived from the actual starting lineup units. */
   balance: number;
+  /** Auction efficiency metric for awards only; it is intentionally excluded from the winner score. */
   value: number;
   remainingBudget: number;
+  scoreBreakdown: RankingScoreBreakdown;
+  /** Present only when the displayed final score tied and a deterministic football-first tiebreak was required. */
+  tieBreakReason: string | null;
   rank: number;
 }
 

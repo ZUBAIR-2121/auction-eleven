@@ -155,11 +155,108 @@ describe("formations and lineup ranking", () => {
       lineupSubmitted: true,
       lineupScore: automatic.score
     };
-    const result = rankManagers([manager])[0]!;
+    const result = rankManagers([manager], DEFAULT_SETTINGS)[0]!;
     expect(result.rank).toBe(1);
     expect(result.formationName.length).toBeGreaterThan(0);
     expect(result.lineupFit).toBeGreaterThan(0);
     expect(result.benchStrength).toBeGreaterThan(0);
+    expect(result.lineupCompleteness).toBe(100);
+  });
+
+  it("scores the configured 8-player starting size instead of assuming eleven", () => {
+    const goalkeeper = sampleSquad.find(entry => entry.footballer.position === "GK")!;
+    const outfield = sampleSquad.filter(entry => entry.footballer.position !== "GK").slice(0, 9);
+    const squad = [goalkeeper, ...outfield];
+    const settings = { ...DEFAULT_SETTINGS, squadSize: 8 as const, substituteCount: 2 as const };
+    const automatic = buildAutomaticLineup(squad, undefined, 8);
+    const manager: ManagerView & { budget: number } = {
+      ...emptyManager, id: "eight", name: "Eight", squad, budget: 250,
+      formationId: automatic.formationId, lineup: automatic.lineup, lineupSubmitted: true, lineupScore: automatic.score
+    };
+    const result = rankManagers([manager], settings)[0]!;
+    expect(result.isComplete).toBe(true);
+    expect(result.lineupCompleteness).toBe(100);
+    expect(result.benchCompleteness).toBe(100);
+    expect(FORMATIONS.find(item => item.id === result.formationId)?.slots).toHaveLength(8);
+    expect(result.scoreBreakdown.startingXIWeight).toBe(45);
+    expect(result.scoreBreakdown.benchWeight).toBe(10);
+  });
+
+  it("removes bench scoring when substitutes are disabled", () => {
+    const goalkeeper = sampleSquad.find(entry => entry.footballer.position === "GK")!;
+    const outfield = sampleSquad.filter(entry => entry.footballer.position !== "GK").slice(0, 7);
+    const squad = [goalkeeper, ...outfield];
+    const settings = { ...DEFAULT_SETTINGS, squadSize: 8 as const, substituteCount: 0 as const };
+    const automatic = buildAutomaticLineup(squad, undefined, 8);
+    const manager: ManagerView & { budget: number } = {
+      ...emptyManager, id: "no-bench", squad, budget: 250,
+      formationId: automatic.formationId, lineup: automatic.lineup, lineupSubmitted: true, lineupScore: automatic.score
+    };
+    const result = rankManagers([manager], settings)[0]!;
+    expect(result.benchStrength).toBe(0);
+    expect(result.scoreBreakdown.benchWeight).toBe(0);
+    expect(result.scoreBreakdown.startingXIWeight).toBe(50);
+    expect(result.scoreBreakdown.lineupFitWeight).toBe(30);
+  });
+
+  it("penalizes an incomplete configured starting lineup transparently", () => {
+    const goalkeeper = sampleSquad.find(entry => entry.footballer.position === "GK")!;
+    const outfield = sampleSquad.filter(entry => entry.footballer.position !== "GK").slice(0, 5);
+    const squad = [goalkeeper, ...outfield];
+    const settings = { ...DEFAULT_SETTINGS, squadSize: 8 as const, substituteCount: 0 as const };
+    const automatic = buildAutomaticLineup(squad, undefined, 8);
+    const manager: ManagerView & { budget: number } = {
+      ...emptyManager, id: "incomplete", squad, budget: 250,
+      formationId: automatic.formationId, lineup: automatic.lineup, lineupSubmitted: true, lineupScore: automatic.score
+    };
+    const result = rankManagers([manager], settings)[0]!;
+    expect(result.isComplete).toBe(false);
+    expect(result.lineupCompleteness).toBe(75);
+    expect(result.scoreBreakdown.completenessMultiplier).toBe(.75);
+    expect(result.score).toBeLessThan(75);
+  });
+
+  it("makes the stronger football team win even when the weaker team has far more budget left", () => {
+    const pickBalanced = (descending: boolean): SquadEntry[] => {
+      const take = (position: "GK" | "DEF" | "MID" | "FWD", count: number) => FOOTBALLERS
+        .filter(player => player.position === position)
+        .sort((a, b) => descending ? b.overall - a.overall : a.overall - b.overall)
+        .slice(0, count);
+      return [...take("GK", 1), ...take("DEF", 4), ...take("MID", 3), ...take("FWD", 3)]
+        .map((footballer, index) => ({ footballer, price: footballer.basePrice, round: index + 1 }));
+    };
+    const settings = { ...DEFAULT_SETTINGS, squadSize: 11 as const, substituteCount: 0 as const };
+    const strongSquad = pickBalanced(true);
+    const weakSquad = pickBalanced(false);
+    const strongAuto = buildAutomaticLineup(strongSquad, undefined, 11);
+    const weakAuto = buildAutomaticLineup(weakSquad, undefined, 11);
+    const strong: ManagerView & { budget: number } = {
+      ...emptyManager, id: "strong", name: "Strong Team", budget: 5, squad: strongSquad,
+      formationId: strongAuto.formationId, lineup: strongAuto.lineup, lineupSubmitted: true, lineupScore: strongAuto.score
+    };
+    const weak: ManagerView & { budget: number } = {
+      ...emptyManager, id: "weak", name: "Weak Team", budget: 995, squad: weakSquad,
+      formationId: weakAuto.formationId, lineup: weakAuto.lineup, lineupSubmitted: true, lineupScore: weakAuto.score
+    };
+    const results = rankManagers([weak, strong], settings);
+    expect(results[0]?.managerId).toBe("strong");
+    expect(results[0]!.score).toBeGreaterThan(results[1]!.score);
+  });
+
+  it("uses remaining budget only as a late tiebreak, not as score", () => {
+    const squad = sampleSquad.slice(0, 16);
+    const automatic = buildAutomaticLineup(squad, undefined, 11);
+    const lowBudget: ManagerView & { budget: number } = {
+      ...emptyManager, id: "low-budget", name: "Low Budget", budget: 10, squad,
+      formationId: automatic.formationId, lineup: automatic.lineup, lineupSubmitted: true, lineupScore: automatic.score
+    };
+    const highBudget: ManagerView & { budget: number } = {
+      ...lowBudget, id: "high-budget", name: "High Budget", budget: 200
+    };
+    const results = rankManagers([lowBudget, highBudget], DEFAULT_SETTINGS);
+    expect(results[0]!.score).toBe(results[1]!.score);
+    expect(results[0]!.managerId).toBe("high-budget");
+    expect(results[0]!.tieBreakReason).toBe("More remaining budget");
   });
 });
 

@@ -1989,20 +1989,97 @@ function Results({ state, managerId, leave }: { state: RoomState; managerId: str
   }, []);
 
   const winner = state.rankings[0];
+  const runnerUp = state.rankings[1];
+  const winnerManager = winner ? state.managers.find(manager => manager.id === winner.managerId) : undefined;
   const starterCount = getStartingLineupSize(state.settings.squadSize);
   const podium = state.rankings.slice(0, 3);
   const podiumOrder = [podium[1], podium[0], podium[2]].filter((item): item is NonNullable<typeof item> => !!item);
+  const scoreText = (score: number | undefined) => Number(score ?? 0).toFixed(2);
+  const depthLabel = state.settings.substituteCount > 0 ? "DEPTH" : "NO BENCH";
+  const formula = winner?.scoreBreakdown;
+  const comparisonRows: Array<{ label: string; winner: number; runner: number }> = winner && runnerUp ? [
+    { label: "Starting XI", winner: winner.startingXIQuality, runner: runnerUp.startingXIQuality },
+    { label: "Formation Fit", winner: winner.lineupFit, runner: runnerUp.lineupFit },
+    { label: "Team Balance", winner: winner.balance, runner: runnerUp.balance },
+    { label: "Attack", winner: winner.attack, runner: runnerUp.attack },
+    { label: "Midfield", winner: winner.midfield, runner: runnerUp.midfield },
+    { label: "Defence", winner: winner.defence, runner: runnerUp.defence },
+    { label: "Goalkeeping", winner: winner.goalkeeping, runner: runnerUp.goalkeeping },
+    ...(state.settings.substituteCount > 0 ? [{ label: "Bench Depth", winner: winner.benchStrength, runner: runnerUp.benchStrength }] : [])
+  ] : [];
+
+  const strongestWinnerEdges = comparisonRows
+    .map(row => ({ ...row, delta: Math.round((row.winner - row.runner) * 10) / 10 }))
+    .filter(row => row.delta > 0)
+    .sort((a, b) => b.delta - a.delta)
+    .slice(0, 3);
 
   return <main className="results page results-scroll-page ae-fixed-page">
     <div ref={scrollAreaRef} className="results-scroll-area ae-scroll-area" data-results-scroll data-ae-scroll tabIndex={-1}>
-      <motion.section initial={{ opacity: 0, y: -18, scale: .96 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: .5, ease: [0.22, 1, 0.36, 1] }} className="winner-hero"><motion.div className="trophy" initial={{ scale: 0, rotate: -18 }} animate={{ scale: 1, rotate: 0 }} transition={{ delay: .15, duration: .55, type: "spring", stiffness: 220, damping: 14 }}>🏆</motion.div><div><div className="eyebrow">FORMATION ANALYSIS COMPLETE</div><h1>{winner?.managerName} wins!</h1><p>{winner?.formationName} · Final team score <strong>{winner?.score}</strong></p></div></motion.section>
-      <section className="podium-section"><div className="podium-stage">{podiumOrder.map((result, i) => <motion.div initial={{ opacity: 0, y: 40, scale: .9 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: .45, delay: .25 + i * .12, type: "spring", stiffness: 200, damping: 18 }} className={`podium-place rank-${result.rank}`} key={result.managerId}><motion.div initial={{ scale: 0, rotate: -30 }} animate={{ scale: 1, rotate: 0 }} transition={{ delay: .4 + i * .12, type: "spring", stiffness: 260, damping: 12 }} className="podium-medal">{result.rank === 1 ? "👑" : result.rank === 2 ? "🥈" : "🥉"}</motion.div><span>#{result.rank}</span><h2>{result.managerName}</h2><strong>{result.score}</strong><small>{result.formationName}</small><div><b>FIT {result.lineupFit}</b><b>XI {result.startingXIQuality}</b><b>DEPTH {result.benchStrength}</b></div></motion.div>)}</div></section>
-      <div className="results-grid"><section className="panel leaderboard"><div className="panel-title"><h2>Final leaderboard</h2><span>SERVER RANKED</span></div>{state.rankings.map((result, i) => <motion.div initial={{ opacity: 0, x: -24 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: .3, delay: .1 + i * .05, ease: [0.22, 1, 0.36, 1] }} className={`rank-row ${result.managerId === managerId ? "you" : ""}`} key={result.managerId}><strong>#{result.rank}</strong><div><b>{result.managerName}</b><small>{result.formationName} · Fit {result.lineupFit} · Depth {result.benchStrength}</small></div><span>{result.score}</span></motion.div>)}</section><section className="panel awards"><div className="panel-title"><h2>Awards</h2><span>MATCH HIGHLIGHTS</span></div>{state.awards.map((award, i) => <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .3, delay: .15 + i * .06, ease: [0.22, 1, 0.36, 1] }} className="award" key={award.title}><div>✦</div><p><span>{award.title}</span><b>{award.managerName}</b><small>{award.detail}</small></p></motion.div>)}</section></div>
+      <motion.section initial={{ opacity: 0, y: -18, scale: .96 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: .5, ease: [0.22, 1, 0.36, 1] }} className="winner-hero result-v2-hero">
+        <motion.div className="trophy" initial={{ scale: 0, rotate: -18 }} animate={{ scale: 1, rotate: 0 }} transition={{ delay: .15, duration: .55, type: "spring", stiffness: 220, damping: 14 }}>🏆</motion.div>
+        {winnerManager && <ManagerBadge avatar={winnerManager.avatar} label={winnerManager.name} size="lg" />}
+        <div className="winner-copy">
+          <div className="eyebrow">RESULT ENGINE V2 · BEST FOOTBALL TEAM WINS</div>
+          <h1>{winner?.managerName ?? "Match complete"}</h1>
+          <p>{winner?.formationName ?? "Formation"} · Final team score <strong>{scoreText(winner?.score)}</strong></p>
+          {winner?.isComplete === false && <div className="result-warning">INCOMPLETE LINEUP · {winner.lineupCompleteness}% of starting slots filled</div>}
+          {winner?.tieBreakReason && <div className="result-tiebreak">TIEBREAK · {winner.tieBreakReason}</div>}
+        </div>
+        <div className="winner-score-orb"><span>TEAM SCORE</span><strong>{scoreText(winner?.score)}</strong><small>/ 100</small></div>
+      </motion.section>
+
+      {winner && formula && <section className="result-formula panel">
+        <div className="panel-title"><h2>How the winner is calculated</h2><span>TRANSPARENT SCORING</span></div>
+        <div className="result-formula-grid">
+          <div><span>Starting XI</span><strong>{winner.startingXIQuality}</strong><small>{formula.startingXIWeight}% weight · +{formula.startingXIContribution.toFixed(2)}</small></div>
+          <div><span>Formation Fit</span><strong>{winner.lineupFit}</strong><small>{formula.lineupFitWeight}% weight · +{formula.lineupFitContribution.toFixed(2)}</small></div>
+          <div><span>Team Balance</span><strong>{winner.balance}</strong><small>{formula.balanceWeight}% weight · +{formula.balanceContribution.toFixed(2)}</small></div>
+          {formula.benchWeight > 0 ? <div><span>Bench Depth</span><strong>{winner.benchStrength}</strong><small>{formula.benchWeight}% weight · +{formula.benchContribution.toFixed(2)}</small></div> : <div><span>Bench</span><strong>N/A</strong><small>Substitutes disabled · weight redistributed</small></div>}
+        </div>
+        <p className="result-formula-note">Auction spending/value does not add points to the winner score. Better buying only helps if it produces a better football team. Incomplete starting lineups receive a {Math.round(formula.completenessMultiplier * 100)}% completeness multiplier.</p>
+      </section>}
+
+      <section className="podium-section"><div className="podium-stage">{podiumOrder.map((result, i) => {
+        const manager = state.managers.find(item => item.id === result.managerId);
+        return <motion.div initial={{ opacity: 0, y: 40, scale: .9 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: .45, delay: .25 + i * .12, type: "spring", stiffness: 200, damping: 18 }} className={`podium-place rank-${result.rank} ${result.isComplete === false ? "incomplete" : ""}`} key={result.managerId}>
+          <motion.div initial={{ scale: 0, rotate: -30 }} animate={{ scale: 1, rotate: 0 }} transition={{ delay: .4 + i * .12, type: "spring", stiffness: 260, damping: 12 }} className="podium-medal">{result.rank === 1 ? "👑" : result.rank === 2 ? "🥈" : "🥉"}</motion.div>
+          {manager && <ManagerBadge avatar={manager.avatar} label={manager.name} size="md" />}
+          <span>#{result.rank}</span><h2>{result.managerName}</h2><strong>{scoreText(result.score)}</strong><small>{result.formationName}</small>
+          <div className="podium-metrics"><b>XI {result.startingXIQuality}</b><b>FIT {result.lineupFit}</b><b>BAL {result.balance}</b>{state.settings.substituteCount > 0 && <b>DEPTH {result.benchStrength}</b>}</div>
+          {result.isComplete === false && <em>INCOMPLETE {result.lineupCompleteness}%</em>}
+        </motion.div>;
+      })}</div></section>
+
+      {winner && runnerUp && <section className="panel top-two-compare">
+        <div className="panel-title"><h2>Top 2 comparison</h2><span>WHY #{winner.managerName.toUpperCase()} WON</span></div>
+        <div className="compare-head"><strong>{winner.managerName}<small>{scoreText(winner.score)}</small></strong><span>VS</span><strong>{runnerUp.managerName}<small>{scoreText(runnerUp.score)}</small></strong></div>
+        <div className="compare-rows">{comparisonRows.map(row => <div key={row.label}><b className={row.winner > row.runner ? "better" : ""}>{row.winner}</b><span>{row.label}</span><b className={row.runner > row.winner ? "better" : ""}>{row.runner}</b></div>)}</div>
+        <div className="why-won">{strongestWinnerEdges.length ? strongestWinnerEdges.map(row => <span key={row.label}>+{row.delta} {row.label}</span>) : <span>Scores were extremely close — tiebreak rules decided the order.</span>}</div>
+      </section>}
+
+      <div className="results-grid">
+        <section className="panel leaderboard">
+          <div className="panel-title"><h2>Final leaderboard</h2><span>SERVER RANKED · OPTION A</span></div>
+          {state.rankings.map((result, i) => <motion.div initial={{ opacity: 0, x: -24 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: .3, delay: .1 + i * .05, ease: [0.22, 1, 0.36, 1] }} className={`rank-row result-v2-rank ${result.managerId === managerId ? "you" : ""}`} key={result.managerId}>
+            <strong>#{result.rank}</strong>
+            <div><b>{result.managerName}</b><small>{result.formationName} · XI {result.startingXIQuality} · Fit {result.lineupFit} · Balance {result.balance}{state.settings.substituteCount > 0 ? ` · Depth ${result.benchStrength}` : ""}</small>{result.isComplete === false && <em>Incomplete lineup · {result.lineupCompleteness}%</em>}{result.tieBreakReason && <em>Tiebreak: {result.tieBreakReason}</em>}</div>
+            <span>{scoreText(result.score)}</span>
+          </motion.div>)}
+        </section>
+        <section className="panel awards"><div className="panel-title"><h2>Awards</h2><span>MATCH HIGHLIGHTS</span></div>{state.awards.map((award, i) => <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .3, delay: .15 + i * .06, ease: [0.22, 1, 0.36, 1] }} className="award" key={`${award.title}-${award.managerName}`}><div>✦</div><p><span>{award.title}</span><b>{award.managerName}</b><small>{award.detail}</small></p></motion.div>)}</section>
+      </div>
+
+      <section className="panel unit-ratings">
+        <div className="panel-title"><h2>Football strength breakdown</h2><span>ACTUAL STARTING LINEUP</span></div>
+        <div className="unit-rating-table"><div className="unit-rating-head"><span>Manager</span><span>ATT</span><span>MID</span><span>DEF</span><span>GK</span><span>BAL</span><span>{depthLabel}</span></div>{state.rankings.map(result => <div className="unit-rating-row" key={result.managerId}><b>{result.managerName}</b><span>{result.attack}</span><span>{result.midfield}</span><span>{result.defence}</span><span>{result.goalkeeping}</span><span>{result.balance}</span><span>{state.settings.substituteCount > 0 ? result.benchStrength : "—"}</span></div>)}</div>
+      </section>
+
       <section className="squads"><h2>Final squads · {starterCount} starters + substitutes</h2><div className="squad-grid">{state.managers.map((manager, i) => {
         const starters = new Set(manager.lineup.map(item => item.footballerId));
         return <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .35, delay: .1 + i * .07, ease: [0.22, 1, 0.36, 1] }} className="squad" key={manager.id}><div><ManagerBadge avatar={manager.avatar} label={manager.name} size="lg" /><h3>{manager.name}</h3><b>{FORMATION_BY_ID.get(manager.formationId ?? "")?.name ?? "Formation"}</b></div><h4>STARTING TEAM · {starterCount}</h4>{manager.squad.filter(entry => starters.has(entry.footballer.id)).map(entry => <SquadRow entry={entry} key={entry.footballer.id} />)}{manager.squad.length > starterCount && <><h4>SUBSTITUTES · {manager.squad.length - starterCount}</h4>{manager.squad.filter(entry => !starters.has(entry.footballer.id)).map(entry => <SquadRow entry={entry} key={entry.footballer.id} />)}</>}</motion.div>;
       })}</div></section>
-      <div className="result-actions"><button className="primary" onClick={() => navigator.clipboard.writeText(`Auction Eleven winner: ${winner?.managerName} — ${winner?.formationName} — ${winner?.score} points!`)}>Copy Result</button><button className="secondary" onClick={leave}>New Match</button></div>
+      <div className="result-actions"><button className="primary" onClick={() => navigator.clipboard.writeText(`Auction Eleven winner: ${winner?.managerName} — ${winner?.formationName} — ${scoreText(winner?.score)} points!`)}>Copy Result</button><button className="secondary" onClick={leave}>New Match</button></div>
     </div>
   </main>;
 }
